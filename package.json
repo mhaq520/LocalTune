@@ -1,0 +1,26 @@
+{
+  "name": "music-player",
+  "version": "0.0.1",
+  "description": "本地音乐播放器 - 支持音频流、歌词同步、缩略图生成",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [
+    "music",
+    "player"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "fs-extra": "^11.3.6",
+    "mime-types": "^3.0.2",
+    "node-cache": "^5.1.2",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
