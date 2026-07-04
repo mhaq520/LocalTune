@@ -398,7 +398,9 @@ app.get('/api/thumbnail', async (req, res) => {
 
     const hash = md5(resolved);
     const s = parseInt(size) || 200;
-    const thumbName = `${hash}_${s}.jpg`;
+    // 缩略图按 4:3 生成，与卡片展示比例一致，避免前端拉伸变形
+    const sh = Math.round(s * 3 / 4);
+    const thumbName = `${hash}_${s}x${sh}.jpg`;
     const thumbPath = path.join(THUMBNAIL_DIR, thumbName);
 
     if (fs.existsSync(thumbPath)) {
@@ -407,7 +409,7 @@ app.get('/api/thumbnail', async (req, res) => {
 
     await fs.ensureDir(THUMBNAIL_DIR);
     await sharp(resolved)
-      .resize(s, s, { fit: 'cover' })
+      .resize(s, sh, { fit: 'cover' })
       .jpeg({ quality: 80 })
       .toFile(thumbPath);
 

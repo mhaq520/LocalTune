@@ -96,29 +96,45 @@ header h1 {
 
 .card-img {
   width: 100%;
-  aspect-ratio: 1;
+  aspect-ratio: 4 / 3;
   object-fit: cover;
   background: #252525;
   display: block;
 }
 
+/* RJ 编号悬浮徽章（封面左上角） */
+.card-rj {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .card-body {
   padding: 10px 12px 12px;
+  background: #ffffff;
 }
 
 .card-title {
   font-size: 14px;
   font-weight: 600;
-  color: #fff;
-  white-space: nowrap;
+  color: #000000;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.card-subtitle {
-  font-size: 12px;
-  color: #888;
-  margin-top: 2px;
+  /* 固定按 3 行预留高度，让所有卡片白底区域一致，避免长短标题割裂 */
+  min-height: calc(1.4em * 3);
 }
 
 .card-badge {

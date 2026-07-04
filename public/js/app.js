@@ -52,7 +52,6 @@ async function loadProjects() {
 
     grid.innerHTML = projects.map(p => {
       const displayName = p.rjCode || p.chineseName || p.name;
-      const subtitle = p.rjCode ? (p.chineseName || p.name) : p.name;
       const imgSrc = p.coverPath
         ? `/api/thumbnail?path=${encodeURIComponent(p.coverPath)}&size=400`
         : '/assets/default-cover.png';
@@ -60,9 +59,9 @@ async function loadProjects() {
       return `
         <div class="card" onclick="openProject('${escapeAttr(p.id)}')">
           <img class="card-img" src="${imgSrc}" alt="${escapeHtml(displayName)}" loading="lazy">
+          ${p.rjCode ? `<span class="card-rj">${escapeHtml(p.rjCode)}</span>` : ''}
           <div class="card-body">
-            <div class="card-title">${escapeHtml(displayName)}</div>
-            <div class="card-subtitle">${escapeHtml(subtitle)}</div>
+            <div class="card-title">${escapeHtml(p.chineseName || p.name)}</div>
           </div>
           <span class="card-badge">${p.audioCount} 首</span>
         </div>
