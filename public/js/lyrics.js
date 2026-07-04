@@ -1,6 +1,8 @@
 const Lyrics = {
   current: [],       // 当前歌词数组 [{time, text}]
   activeIndex: -1,
+  isUserScrolling: false,   // 用户是否正在手动滚动浏览
+  autoScrollTimer: null,    // 5 秒自动回位定时器
 
   // 解析歌词文本（自动检测 LRC / VTT）
   parse(text) {
@@ -103,7 +105,7 @@ const Lyrics = {
     }
 
     content.innerHTML = this.current.map((l, i) =>
-      `<p data-index="${i}">${escapeHtml(l.text)}</p>`
+      `<p data-index="${i}" data-time="${l.time}">${escapeHtml(l.text)}</p>`
     ).join('');
   },
 
@@ -138,9 +140,70 @@ const Lyrics = {
       const active = content.querySelector(`p[data-index="${this.activeIndex}"]`);
       if (active) {
         active.classList.add('active');
-        active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // 用户手动滚动浏览期间不强制回位（5 秒定时器到时会统一回位）
+        if (!this.isUserScrolling) {
+          active.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
       }
     }
+  },
+
+  // 初始化：点击歌词跳转 + 用户滚动检测（5 秒后自动回位）
+  // 仅绑定一次，依赖事件委托，render() 后无需重新绑定
+  init() {
+    const content = document.getElementById('lyricsContent');
+    if (!content) return;
+
+    // 点击歌词行 → 跳转音频到对应时间戳
+    content.addEventListener('click', (e) => {
+      const p = e.target.closest('p[data-time]');
+      if (!p) return;
+      const time = parseFloat(p.dataset.time);
+      if (isNaN(time)) return;
+
+      // 取消「用户滚动」状态，让 highlight 能立即 scrollIntoView 到点击行
+      this.isUserScrolling = false;
+      clearTimeout(this.autoScrollTimer);
+
+      if (typeof Player !== 'undefined' && Player.audio) {
+        try {
+          Player.audio.currentTime = time;
+        } catch (_) {}
+      }
+
+      // 立即设置 active 并高亮，避免依赖 timeupdate 时机
+      const idx = parseInt(p.dataset.index);
+      if (!isNaN(idx)) {
+        this.activeIndex = idx;
+        this.highlight();
+      }
+    });
+
+    // 用户手动滚动检测：wheel / touchmove / 拖动滚动条 / 键盘滚动键
+    // 注意：scrollIntoView 不会触发这些事件，故可区分用户与程序滚动
+    const onUserScroll = () => {
+      this.isUserScrolling = true;
+      clearTimeout(this.autoScrollTimer);
+      this.autoScrollTimer = setTimeout(() => {
+        this.isUserScrolling = false;
+        this.highlight();
+      }, 5000);
+    };
+
+    content.addEventListener('wheel', onUserScroll);
+    content.addEventListener('touchmove', onUserScroll);
+    content.addEventListener('mousedown', (e) => {
+      // 点击滚动条区域（内容宽度之外但元素内）
+      const rect = content.getBoundingClientRect();
+      if (e.clientX > rect.left + content.clientWidth) {
+        onUserScroll();
+      }
+    });
+    content.addEventListener('keydown', (e) => {
+      if (['PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+        onUserScroll();
+      }
+    });
   },
 
   // 显示/隐藏歌词弹窗

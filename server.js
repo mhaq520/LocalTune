@@ -417,6 +417,35 @@ app.get('/api/thumbnail', async (req, res) => {
   }
 });
 
+// 原图服务（用于浏览器内图片预览，保留原始宽高比，不裁剪）
+app.get('/api/image/:projectId/*subpath', (req, res) => {
+  try {
+    const { projectId, subpath } = req.params;
+    const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
+
+    if (!isSafePath(projectId, subPath)) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+
+    const imgPath = path.join(MUSIC_ROOT, projectId, subPath);
+
+    if (!fs.existsSync(imgPath)) {
+      return res.status(404).json({ error: 'Image not found' });
+    }
+
+    const mimeType = mime.lookup(imgPath);
+    if (!mimeType || !mimeType.startsWith('image/')) {
+      return res.status(400).json({ error: 'Not an image' });
+    }
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(imgPath);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 强制刷新缓存
 app.get('/api/refresh', async (req, res) => {
   try {

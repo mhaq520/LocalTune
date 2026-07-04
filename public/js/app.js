@@ -207,6 +207,14 @@ function renderFileList(dirs, files, subPath) {
             ${f.lrcPath ? '<span class="track-lrc-badge">词</span>' : ''}
             <span class="track-status"></span>
           </div>`;
+      } else if (f.type === 'image') {
+        const relPath = subPath ? `${subPath}/${f.name}` : f.name;
+        html += `
+          <div class="file-item image-item" onclick="previewImage('${escapeAttr(relPath)}')">
+            <span class="file-icon">${icon}</span>
+            <span class="file-name">${escapeHtml(f.name)}</span>
+            <span class="track-status">预览</span>
+          </div>`;
       } else {
         html += `
           <div class="file-item">
@@ -276,6 +284,34 @@ document.getElementById('volumeBar').addEventListener('input', (e) => {
 document.getElementById('lyricsToggleBtn').addEventListener('click', () => Lyrics.toggle());
 document.getElementById('lyricsCloseBtn').addEventListener('click', () => Lyrics.toggle());
 Lyrics.initDrag();
+Lyrics.init();
+
+// 图片预览弹窗
+const imageOverlay = document.getElementById('imageOverlay');
+const imagePreview = document.getElementById('imagePreview');
+if (imageOverlay) {
+  imageOverlay.addEventListener('click', (e) => {
+    // 点击遮罩或关闭按钮都关闭
+    if (e.target === imageOverlay || e.target.id === 'imageCloseBtn') {
+      imageOverlay.classList.add('hidden');
+      imagePreview.src = '';
+    }
+  });
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && imageOverlay && !imageOverlay.classList.contains('hidden')) {
+    imageOverlay.classList.add('hidden');
+    imagePreview.src = '';
+  }
+});
+
+// 预览图片（在浏览器内打开原图）
+window.previewImage = function (relPath) {
+  if (!imageOverlay || !imagePreview) return;
+  const url = `/api/image/${encodeURIComponent(currentProjectId)}/${encodePath(relPath)}`;
+  imagePreview.src = url;
+  imageOverlay.classList.remove('hidden');
+};
 
 // 迷你播放器
 document.getElementById('miniBtn').addEventListener('click', () => {
