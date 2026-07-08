@@ -171,8 +171,9 @@ function updateAutoStart() {
 }
 
 // IPC：选择文件夹
-ipcMain.handle('dialog:openFolder', async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle('dialog:openFolder', async (event) => {
+  const parentWin = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(parentWin, {
     properties: ['openDirectory']
   });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -242,6 +243,12 @@ ipcMain.handle('shell:openPath', async (event, p) => {
   if (p && fs.existsSync(p)) {
     shell.openPath(p);
   }
+  return { success: true };
+});
+
+// IPC：打开设置窗口（由主页设置按钮触发）
+ipcMain.handle('settings:open', () => {
+  createSettingsWindow();
   return { success: true };
 });
 

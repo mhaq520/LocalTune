@@ -102,6 +102,32 @@ header h1 {
   transform: scale(0.97);
 }
 
+.btn-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.btn-settings:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  transform: rotate(45deg);
+}
+
+.btn-settings:active {
+  transform: scale(0.92);
+}
+
 /* ========== Card Grid ========== */
 .grid {
   display: grid;

@@ -75,9 +75,13 @@ async function selectFolder(inputId) {
     alert('该功能仅在桌面应用中可用');
     return;
   }
-  const result = await api.invoke('dialog:openFolder');
-  if (result) {
-    document.getElementById(inputId).value = result;
+  try {
+    const result = await api.invoke('dialog:openFolder');
+    if (result) {
+      document.getElementById(inputId).value = result;
+    }
+  } catch (e) {
+    showStatus('打开文件夹选择器失败: ' + e.message, 'error');
   }
 }
 
@@ -103,10 +107,22 @@ async function saveSettings() {
       await api.invoke('window:reloadMain');
       showStatus('保存成功', 'success');
     } else {
-      // HTTP 回退：调 /api/cache/clear 已无意义，这里只刷新
-      const r = await fetch('/api/refresh');
-      if (r.ok) showStatus('已刷新扫描缓存', 'success');
-      else showStatus('保存失败', 'error');
+      // Web 模式：POST /api/config 热更新运行时并持久化到 web-config.json
+      const r = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg)
+      });
+      const j = await r.json();
+      if (r.ok && j.success) {
+        if (j.needRestart) {
+          showStatus('已保存。端口改动需重启服务生效', 'success');
+        } else {
+          showStatus('保存成功，已切换目录', 'success');
+        }
+      } else {
+        showStatus('保存失败: ' + (j.error || '未知错误'), 'error');
+      }
     }
   } catch (e) {
     showStatus('保存失败: ' + e.message, 'error');
@@ -144,6 +160,16 @@ async function openCacheDir() {
 document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   loadCacheInfo();
+
+  // Web 模式下无原生文件夹选择器：解除 readonly 允许手动输入路径
+  if (!api) {
+    const m = document.getElementById('musicRoot');
+    const t = document.getElementById('thumbnailDir');
+    m.removeAttribute('readonly');
+    t.removeAttribute('readonly');
+    m.placeholder = '请输入音乐根目录的绝对路径';
+    t.placeholder = '请输入缓存目录的绝对路径（留空使用默认）';
+  }
 
   document.getElementById('btnBrowseMusic').addEventListener('click', () => selectFolder('musicRoot'));
   document.getElementById('btnBrowseCache').addEventListener('click', () => selectFolder('thumbnailDir'));

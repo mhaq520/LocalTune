@@ -5,7 +5,9 @@
 ## 功能特性
 
 - 桌面应用：Electron 独立窗口运行，系统托盘常驻，支持开机自启、最小化到托盘、单实例锁
-- 设置面板：图形化配置音乐目录 / 缓存目录 / 服务端口，一键清理缓存，配置持久化到 userData
+- 设置入口：主页右上角齿轮图标，Electron 下打开独立设置窗口，Web 下跳转设置页
+- 设置面板：图形化配置音乐目录 / 缓存目录 / 服务端口 / 行为开关，一键清理缓存，配置持久化
+- 空目录引导：首次启动不预置目录，所有数据接口在未配置时返回友好提示，引导用户进入设置
 - 目录扫描：自动扫描音乐目录，支持两级目录结构（大项目/小项目）
 - 音频播放：支持 MP3、FLAC、WAV、M4A、OGG，支持 Range 请求（拖拽进度条）
 - 歌词同步：支持 LRC 和 VTT 格式，自动匹配，高亮当前行
@@ -53,8 +55,9 @@ npm install
 npm run electron
 ```
 
-首次启动会打开设置面板，填入音乐目录后保存即可。配置文件存放在：
-`%AppData%\music-player\config.json`
+首次启动不预置音乐目录，主页面会提示「请先在设置中选择音乐目录」。
+点击主页右上角齿轮图标打开设置窗口 → 浏览选择音乐目录 → 保存，服务自动重启生效。
+配置文件存放在：`%AppData%\music-player\config.json`
 
 #### 方式 B：纯 Web 服务
 
@@ -68,7 +71,9 @@ npm start
 
 访问 http://localhost:3000
 
-Web 模式下可通过环境变量配置：
+首次启动同样需进入设置：点击主页右上角齿轮 → 跳转 `/settings.html` → 手动输入音乐目录绝对路径 → 保存（写入项目根 `web-config.json` 并热更新）。
+
+也可通过环境变量预配置（跳过设置步骤）：
 
 ```powershell
 $env:MUSIC_ROOT="D:\你的音乐目录"
@@ -82,14 +87,14 @@ npm start
 
 ```
 MUSIC_ROOT/
-├── 项目A/
+├── 项目A/                    #中文名
 │   ├── 正篇/
 │   │   ├── track1.mp3
 │   │   ├── track1.lrc        # 歌词（可选）
 │   │   └── track2.mp3
 │   ├── 插图/
 │   │   └── 封面.png
-│   └── name.txt              # 中文名（可选）
+│   └── name.txt              # 编号（可选）
 └── 项目B/
 ```
 
@@ -142,6 +147,7 @@ MUSIC_ROOT/
 | GET | /api/cache/size | 缩略图缓存大小与文件数 |
 | POST | /api/cache/clear | 清空缩略图与扫描缓存 |
 | GET | /api/config | 读取当前运行时配置（不含敏感字段） |
+| POST | /api/config | 保存配置（Web 模式专用，写 web-config.json 并热更新） |
 
 ## 键盘快捷键
 
@@ -271,3 +277,12 @@ MIT
 - 缓存管理：新增 `/api/cache/size`、`/api/cache/clear` 接口及设置面板一键清理
 - 安全 IPC：`contextBridge` + `contextIsolation`，preload 暴露 `window.electronAPI`
 - 打包：electron-builder NSIS 安装包，sharp 原生模块 asarUnpack 解包，跳过代码签名
+
+### v0.1.1
+
+- 设置入口：主页右上角新增齿轮图标，Electron 打开独立设置窗口，Web 跳转 `/settings.html`
+- 空目录引导：移除硬编码默认音乐目录，首次启动所有数据接口返回「请先在设置中选择音乐目录」
+- Web 模式配置保存：新增 POST `/api/config`，写入 `web-config.json` 并热更新运行时目录
+- 设置页字体修复：settings.css 误用不存在的 CSS 变量导致字体黑色不可见，已统一为 `--text-primary` 等
+- 文件夹选择修复：`dialog.showOpenDialog` 绑定父窗口，避免弹窗被遮挡；仅 header 区域可拖动窗口
+- Web 模式下输入框解除 readonly，支持手动输入路径

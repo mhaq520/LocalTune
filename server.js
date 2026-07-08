@@ -11,13 +11,29 @@ const crypto = require('crypto');
 const memCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
 // 运行时配置（可由 startServer(options) 覆盖，路由内通过 getCfg() 读取）
-const DEFAULT_MUSIC_ROOT = process.env.MUSIC_ROOT || 'F:\\新建文件夹\\新建文件夹\\Kikoeru';
+const DEFAULT_MUSIC_ROOT = process.env.MUSIC_ROOT || '';
+const WEB_CONFIG_FILE = path.join(__dirname, 'web-config.json');
 const runtimeConfig = {
   PORT: parseInt(process.env.PORT) || 3000,
   MUSIC_ROOT: DEFAULT_MUSIC_ROOT,
   CACHE_FILE: path.join(__dirname, 'cache.json'),
   THUMBNAIL_DIR: path.join(__dirname, 'thumbnails')
 };
+
+// Web 模式（直接 node server.js）下读取 web-config.json 覆盖默认值
+// Electron 模式下配置由 lib/config.js 管理，不读此文件
+function loadWebConfig() {
+  try {
+    if (fs.existsSync(WEB_CONFIG_FILE)) {
+      const c = fs.readJsonSync(WEB_CONFIG_FILE);
+      if (c.musicRoot) runtimeConfig.MUSIC_ROOT = c.musicRoot;
+      if (c.thumbnailDir) runtimeConfig.THUMBNAIL_DIR = c.thumbnailDir;
+      if (c.cacheFile) runtimeConfig.CACHE_FILE = c.cacheFile;
+      // 端口不在运行时热改（需重启 node 进程），仅记录
+    }
+  } catch (e) { /* ignore */ }
+}
+loadWebConfig();
 
 function getCfg() { return runtimeConfig; }
 
@@ -35,9 +51,11 @@ app.use((req, res, next) => {
 });
 app.use('/music', (req, res, next) => {
   // 动态静态目录（express.static 在启动时绑定，这里用 inline middleware 重新映射）
+  const root = getCfg().MUSIC_ROOT;
+  if (!root) return next();
   try {
     const rel = decodeURIComponent(req.path.replace(/^\//, ''));
-    const p = path.join(getCfg().MUSIC_ROOT, rel);
+    const p = path.join(root, rel);
     if (fs.existsSync(p) && fs.statSync(p).isFile()) return res.sendFile(p);
   } catch (e) { /* ignore */ }
   next();
@@ -190,6 +208,9 @@ function isProjectDir(dirPath) {
 
 async function scanProjects() {
   const MUSIC_ROOT = getCfg().MUSIC_ROOT;
+  if (!MUSIC_ROOT) {
+    return { projects: [], error: '请先在设置中选择音乐目录' };
+  }
   if (!fs.existsSync(MUSIC_ROOT)) {
     return { projects: [], error: `音乐目录不存在: ${MUSIC_ROOT}` };
   }
@@ -360,6 +381,9 @@ app.get('/api/projects', async (req, res) => {
 // 浏览项目目录
 app.get('/api/browse/:projectId', (req, res) => {
   try {
+    if (!getCfg().MUSIC_ROOT) {
+      return res.status(400).json({ error: '请先在设置中选择音乐目录' });
+    }
     const { projectId } = req.params;
     if (!isSafePath(projectId)) {
       return res.status(400).json({ error: 'Invalid project ID' });
@@ -389,6 +413,9 @@ app.get('/api/browse/:projectId', (req, res) => {
 // 浏览项目子目录
 app.get('/api/browse/:projectId/*subpath', (req, res) => {
   try {
+    if (!getCfg().MUSIC_ROOT) {
+      return res.status(400).json({ error: '请先在设置中选择音乐目录' });
+    }
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
 
@@ -411,6 +438,9 @@ app.get('/api/browse/:projectId/*subpath', (req, res) => {
 // 缩略图服务
 app.get('/api/thumbnail', async (req, res) => {
   try {
+    if (!getCfg().MUSIC_ROOT) {
+      return res.status(400).json({ error: '请先在设置中选择音乐目录' });
+    }
     const { path: imgPath, size } = req.query;
     if (!imgPath) {
       return res.status(400).json({ error: 'Missing path parameter' });
@@ -453,6 +483,9 @@ app.get('/api/thumbnail', async (req, res) => {
 // 原图服务（用于浏览器内图片预览，保留原始宽高比，不裁剪）
 app.get('/api/image/:projectId/*subpath', (req, res) => {
   try {
+    if (!getCfg().MUSIC_ROOT) {
+      return res.status(400).json({ error: '请先在设置中选择音乐目录' });
+    }
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
 
@@ -542,9 +575,40 @@ app.get('/api/config', (req, res) => {
   });
 });
 
+// 保存配置（Web 模式专用：写入 web-config.json 并热更新运行时）
+// Electron 模式下由主进程 IPC 处理，不走此接口
+app.post('/api/config', (req, res) => {
+  try {
+    const { musicRoot, thumbnailDir, port } = req.body || {};
+    const toSave = {
+      musicRoot: (musicRoot || '').trim(),
+      thumbnailDir: (thumbnailDir || '').trim(),
+      port: parseInt(port) || runtimeConfig.PORT
+    };
+    // 热更新运行时（端口除外，需重启 node 进程）
+    if (req.body && 'musicRoot' in req.body) runtimeConfig.MUSIC_ROOT = toSave.musicRoot;
+    if (req.body && 'thumbnailDir' in req.body) runtimeConfig.THUMBNAIL_DIR = toSave.thumbnailDir;
+    // 持久化
+    fs.writeJsonSync(WEB_CONFIG_FILE, toSave, { spaces: 2 });
+    // 清除扫描缓存以便新目录生效
+    memCache.del('projects');
+    try { fs.removeSync(getCfg().CACHE_FILE); } catch (e) { /* ignore */ }
+    res.json({
+      success: true,
+      portChanged: toSave.port !== runtimeConfig.PORT,
+      needRestart: toSave.port !== runtimeConfig.PORT
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 音频流服务（支持 Range 请求，支持子目录）
 app.get('/api/audio/:projectId/*subpath', (req, res) => {
   try {
+    if (!getCfg().MUSIC_ROOT) {
+      return res.status(400).json({ error: '请先在设置中选择音乐目录' });
+    }
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
 
@@ -594,6 +658,9 @@ app.get('/api/audio/:projectId/*subpath', (req, res) => {
 // 歌词文件服务（LRC / VTT）
 app.get('/api/lyrics/:projectId/*subpath', (req, res) => {
   try {
+    if (!getCfg().MUSIC_ROOT) {
+      return res.status(400).json({ error: '请先在设置中选择音乐目录' });
+    }
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
 
@@ -626,10 +693,10 @@ app.get('/detail/:id', (req, res) => {
 // 启动服务器：可传入 { PORT, MUSIC_ROOT, THUMBNAIL_DIR, CACHE_FILE } 覆盖默认值
 // 返回 http.Server 实例，便于 Electron 主进程关闭/重启
 function startServer(options = {}) {
-  if (options.MUSIC_ROOT) runtimeConfig.MUSIC_ROOT = options.MUSIC_ROOT;
-  if (options.THUMBNAIL_DIR) runtimeConfig.THUMBNAIL_DIR = options.THUMBNAIL_DIR;
-  if (options.CACHE_FILE) runtimeConfig.CACHE_FILE = options.CACHE_FILE;
-  if (options.PORT) runtimeConfig.PORT = parseInt(options.PORT) || runtimeConfig.PORT;
+  if ('MUSIC_ROOT' in options) runtimeConfig.MUSIC_ROOT = options.MUSIC_ROOT;
+  if ('THUMBNAIL_DIR' in options) runtimeConfig.THUMBNAIL_DIR = options.THUMBNAIL_DIR;
+  if ('CACHE_FILE' in options) runtimeConfig.CACHE_FILE = options.CACHE_FILE;
+  if ('PORT' in options) runtimeConfig.PORT = parseInt(options.PORT) || runtimeConfig.PORT;
 
   const PORT = runtimeConfig.PORT;
   return app.listen(PORT, () => {
