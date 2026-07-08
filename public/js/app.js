@@ -339,6 +339,17 @@ document.getElementById('refreshBtn').addEventListener('click', async () => {
   }
 });
 
+// 设置按钮：Electron 下打开独立设置窗口，Web 下跳转设置页
+document.getElementById('settingsBtn').addEventListener('click', async () => {
+  if (window.electronAPI && window.electronAPI.invoke) {
+    try {
+      await window.electronAPI.invoke('settings:open');
+    } catch (e) { /* ignore */ }
+  } else {
+    window.location.href = '/settings.html';
+  }
+});
+
 // 键盘快捷键
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT') return;

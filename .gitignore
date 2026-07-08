@@ -1,6 +1,7 @@
 node_modules/
 thumbnails/
 cache.json
+web-config.json
 .env
 *.log
 .DS_Store
