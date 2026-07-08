@@ -7,21 +7,49 @@ const NodeCache = require('node-cache');
 const cors = require('cors');
 const crypto = require('crypto');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const MUSIC_ROOT = 'F:\\新建文件夹\\新建文件夹\\Kikoeru';
-const CACHE_FILE = path.join(__dirname, 'cache.json');
-const THUMBNAIL_DIR = path.join(__dirname, 'thumbnails');
-
 // 内存缓存，TTL 5分钟
 const memCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+
+// 运行时配置（可由 startServer(options) 覆盖，路由内通过 getCfg() 读取）
+const DEFAULT_MUSIC_ROOT = process.env.MUSIC_ROOT || 'F:\\新建文件夹\\新建文件夹\\Kikoeru';
+const runtimeConfig = {
+  PORT: parseInt(process.env.PORT) || 3000,
+  MUSIC_ROOT: DEFAULT_MUSIC_ROOT,
+  CACHE_FILE: path.join(__dirname, 'cache.json'),
+  THUMBNAIL_DIR: path.join(__dirname, 'thumbnails')
+};
+
+function getCfg() { return runtimeConfig; }
+
+const app = express();
 
 // 中间件
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/music', express.static(MUSIC_ROOT));
-app.use('/thumbnails', express.static(THUMBNAIL_DIR));
+// 注意：MUSIC_ROOT / THUMBNAIL_DIR 在请求时通过 getCfg() 读取，便于运行时切换
+app.use((req, res, next) => {
+  res.locals.musicRoot = getCfg().MUSIC_ROOT;
+  res.locals.thumbnailDir = getCfg().THUMBNAIL_DIR;
+  next();
+});
+app.use('/music', (req, res, next) => {
+  // 动态静态目录（express.static 在启动时绑定，这里用 inline middleware 重新映射）
+  try {
+    const rel = decodeURIComponent(req.path.replace(/^\//, ''));
+    const p = path.join(getCfg().MUSIC_ROOT, rel);
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) return res.sendFile(p);
+  } catch (e) { /* ignore */ }
+  next();
+});
+app.use('/thumbnails', (req, res, next) => {
+  try {
+    const rel = decodeURIComponent(req.path.replace(/^\//, ''));
+    const p = path.join(getCfg().THUMBNAIL_DIR, rel);
+    if (fs.existsSync(p) && fs.statSync(p).isFile()) return res.sendFile(p);
+  } catch (e) { /* ignore */ }
+  next();
+});
 
 // ---------- 工具函数 ----------
 
@@ -161,6 +189,7 @@ function isProjectDir(dirPath) {
 }
 
 async function scanProjects() {
+  const MUSIC_ROOT = getCfg().MUSIC_ROOT;
   if (!fs.existsSync(MUSIC_ROOT)) {
     return { projects: [], error: `音乐目录不存在: ${MUSIC_ROOT}` };
   }
@@ -292,6 +321,7 @@ function getCachedProjects() {
   if (cached) return cached;
 
   try {
+    const CACHE_FILE = getCfg().CACHE_FILE;
     if (fs.existsSync(CACHE_FILE)) {
       const fileCache = fs.readJsonSync(CACHE_FILE);
       if (fileCache && fileCache.projects) {
@@ -307,7 +337,7 @@ function getCachedProjects() {
 function setCachedProjects(data) {
   memCache.set('projects', data);
   try {
-    fs.writeJsonSync(CACHE_FILE, data);
+    fs.writeJsonSync(getCfg().CACHE_FILE, data);
   } catch (e) { /* ignore */ }
 }
 
@@ -335,7 +365,7 @@ app.get('/api/browse/:projectId', (req, res) => {
       return res.status(400).json({ error: 'Invalid project ID' });
     }
 
-    const projectDir = path.join(MUSIC_ROOT, projectId);
+    const projectDir = path.join(getCfg().MUSIC_ROOT, projectId);
     if (!fs.existsSync(projectDir)) {
       return res.status(404).json({ error: 'Project not found' });
     }
@@ -366,7 +396,7 @@ app.get('/api/browse/:projectId/*subpath', (req, res) => {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
-    const fullPath = path.join(MUSIC_ROOT, projectId, subPath);
+    const fullPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ error: 'Directory not found' });
     }
@@ -387,7 +417,7 @@ app.get('/api/thumbnail', async (req, res) => {
     }
 
     const resolved = path.resolve(imgPath);
-    const normalizedRoot = path.resolve(MUSIC_ROOT);
+    const normalizedRoot = path.resolve(getCfg().MUSIC_ROOT);
     if (!resolved.startsWith(normalizedRoot)) {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -401,6 +431,7 @@ app.get('/api/thumbnail', async (req, res) => {
     // 缩略图按 4:3 生成，与卡片展示比例一致，避免前端拉伸变形
     const sh = Math.round(s * 3 / 4);
     const thumbName = `${hash}_${s}x${sh}.jpg`;
+    const THUMBNAIL_DIR = getCfg().THUMBNAIL_DIR;
     const thumbPath = path.join(THUMBNAIL_DIR, thumbName);
 
     if (fs.existsSync(thumbPath)) {
@@ -429,7 +460,7 @@ app.get('/api/image/:projectId/*subpath', (req, res) => {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
-    const imgPath = path.join(MUSIC_ROOT, projectId, subPath);
+    const imgPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
 
     if (!fs.existsSync(imgPath)) {
       return res.status(404).json({ error: 'Image not found' });
@@ -460,6 +491,57 @@ app.get('/api/refresh', async (req, res) => {
   }
 });
 
+// 缓存大小查询
+app.get('/api/cache/size', async (req, res) => {
+  try {
+    const THUMBNAIL_DIR = getCfg().THUMBNAIL_DIR;
+    let totalBytes = 0;
+    let fileCount = 0;
+    if (fs.existsSync(THUMBNAIL_DIR)) {
+      const files = await fs.readdir(THUMBNAIL_DIR);
+      for (const f of files) {
+        const stat = await fs.stat(path.join(THUMBNAIL_DIR, f));
+        if (stat.isFile()) {
+          totalBytes += stat.size;
+          fileCount++;
+        }
+      }
+    }
+    res.json({ size: totalBytes, count: fileCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 清理缩略图缓存
+app.post('/api/cache/clear', async (req, res) => {
+  try {
+    const THUMBNAIL_DIR = getCfg().THUMBNAIL_DIR;
+    if (fs.existsSync(THUMBNAIL_DIR)) {
+      const files = await fs.readdir(THUMBNAIL_DIR);
+      for (const f of files) {
+        await fs.remove(path.join(THUMBNAIL_DIR, f));
+      }
+    }
+    // 同时清除项目扫描缓存
+    memCache.del('projects');
+    try { await fs.remove(getCfg().CACHE_FILE); } catch (e) { /* ignore */ }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 获取当前配置（前端设置页可读取展示）
+app.get('/api/config', (req, res) => {
+  const cfg = getCfg();
+  res.json({
+    musicRoot: cfg.MUSIC_ROOT,
+    thumbnailDir: cfg.THUMBNAIL_DIR,
+    port: cfg.PORT
+  });
+});
+
 // 音频流服务（支持 Range 请求，支持子目录）
 app.get('/api/audio/:projectId/*subpath', (req, res) => {
   try {
@@ -470,7 +552,7 @@ app.get('/api/audio/:projectId/*subpath', (req, res) => {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
-    const audioPath = path.join(MUSIC_ROOT, projectId, subPath);
+    const audioPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
 
     if (!fs.existsSync(audioPath)) {
       return res.status(404).json({ error: 'Audio file not found' });
@@ -519,7 +601,7 @@ app.get('/api/lyrics/:projectId/*subpath', (req, res) => {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
-    const lrcPath = path.join(MUSIC_ROOT, projectId, subPath);
+    const lrcPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
 
     if (!fs.existsSync(lrcPath)) {
       return res.status(404).json({ error: 'Lyrics file not found' });
@@ -541,8 +623,26 @@ app.get('/detail/:id', (req, res) => {
   res.redirect('/');
 });
 
-// 启动服务器
-app.listen(PORT, () => {
-  console.log(`音乐播放器已启动: http://localhost:${PORT}`);
-  console.log(`音乐目录: ${MUSIC_ROOT}`);
-});
+// 启动服务器：可传入 { PORT, MUSIC_ROOT, THUMBNAIL_DIR, CACHE_FILE } 覆盖默认值
+// 返回 http.Server 实例，便于 Electron 主进程关闭/重启
+function startServer(options = {}) {
+  if (options.MUSIC_ROOT) runtimeConfig.MUSIC_ROOT = options.MUSIC_ROOT;
+  if (options.THUMBNAIL_DIR) runtimeConfig.THUMBNAIL_DIR = options.THUMBNAIL_DIR;
+  if (options.CACHE_FILE) runtimeConfig.CACHE_FILE = options.CACHE_FILE;
+  if (options.PORT) runtimeConfig.PORT = parseInt(options.PORT) || runtimeConfig.PORT;
+
+  const PORT = runtimeConfig.PORT;
+  return app.listen(PORT, () => {
+    console.log(`音乐播放器已启动: http://localhost:${PORT}`);
+    console.log(`音乐目录: ${runtimeConfig.MUSIC_ROOT}`);
+    console.log(`缩略图缓存: ${runtimeConfig.THUMBNAIL_DIR}`);
+  });
+}
+
+// 直接 node server.js 启动（保留命令行用法）
+if (require.main === module) {
+  startServer();
+}
+
+// 导出供 Electron 主进程调用
+module.exports = { app, startServer, getCfg, runtimeConfig };

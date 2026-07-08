@@ -1,17 +1,25 @@
 {
   "name": "music-player",
-  "version": "0.0.4",
+  "version": "0.1.0",
   "description": "本地音乐播放器 - 支持音频流、歌词同步、缩略图生成",
-  "main": "server.js",
+  "main": "main.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "electron": "electron .",
+    "electron:dev": "electron . --dev",
+    "rebuild": "electron-rebuild -f -w sharp",
+    "dist": "cross-env CI=false electron-builder --win",
+    "dist:portable": "cross-env CI=false electron-builder --win portable",
+    "pack": "cross-env CI=false electron-builder --dir"
   },
   "keywords": [
     "music",
-    "player"
+    "player",
+    "electron"
   ],
   "license": "MIT",
+  "author": "",
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1",
@@ -21,6 +29,56 @@
     "sharp": "^0.35.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
+    "cross-env": "^10.1.0",
+    "electron": "^43.1.0",
+    "electron-builder": "^25.0.0",
     "nodemon": "^3.1.14"
+  },
+  "build": {
+    "appId": "com.local.musicplayer",
+    "productName": "音乐播放器",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "lib/**/*",
+      "public/**/*",
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/**/{README.md,README,readme.md,readme,test,tests,__tests__}",
+      "!node_modules/**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!**/.*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "音乐播放器"
+    }
   }
 }

@@ -1,9 +1,11 @@
 # 音乐播放器 (Music Player)
 
-基于 Node.js + Express 的本地音乐播放器。
+基于 Node.js + Express 的本地音乐播放器，支持以 **Electron 桌面应用** 形式独立窗口运行，也可作为纯 Web 服务启动。
 
 ## 功能特性
 
+- 桌面应用：Electron 独立窗口运行，系统托盘常驻，支持开机自启、最小化到托盘、单实例锁
+- 设置面板：图形化配置音乐目录 / 缓存目录 / 服务端口，一键清理缓存，配置持久化到 userData
 - 目录扫描：自动扫描音乐目录，支持两级目录结构（大项目/小项目）
 - 音频播放：支持 MP3、FLAC、WAV、M4A、OGG，支持 Range 请求（拖拽进度条）
 - 歌词同步：支持 LRC 和 VTT 格式，自动匹配，高亮当前行
@@ -22,6 +24,8 @@
 
 | 类别 | 依赖 |
 |------|------|
+| 桌面壳 | electron |
+| 打包 | electron-builder (NSIS) |
 | Web 框架 | express |
 | 文件操作 | fs-extra |
 | 图片处理 | sharp |
@@ -38,22 +42,21 @@
 npm install
 ```
 
-### 2. 配置音乐目录
+> 首次安装 Electron 二进制若失败，可切换 npmmirror 镜像：
+> `$env:ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"; node node_modules/electron/install.js`
 
-编辑 server.js 第 12 行：
+### 2. 启动方式（二选一）
 
-```javascript
-const MUSIC_ROOT = 'F:\\你的\\音乐\\目录';
+#### 方式 A：Electron 桌面应用（推荐）
+
+```bash
+npm run electron
 ```
 
-或通过环境变量：
+首次启动会打开设置面板，填入音乐目录后保存即可。配置文件存放在：
+`%AppData%\music-player\config.json`
 
-```powershell
-$env:MUSIC_PATH="D:\你的音乐目录"
-npm start
-```
-
-### 3. 启动
+#### 方式 B：纯 Web 服务
 
 ```bash
 # 开发模式（热重载）
@@ -65,9 +68,10 @@ npm start
 
 访问 http://localhost:3000
 
-### 4. 自定义端口
+Web 模式下可通过环境变量配置：
 
 ```powershell
+$env:MUSIC_ROOT="D:\你的音乐目录"
 $env:PORT="8080"
 npm start
 ```
@@ -126,6 +130,7 @@ MUSIC_ROOT/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | / | 主页面（SPA） |
+| GET | /settings.html | 设置面板（Electron 内嵌） |
 | GET | /api/projects | 获取所有项目列表 |
 | GET | /api/browse/:projectId | 浏览项目根目录 |
 | GET | /api/browse/:projectId/:subpath | 浏览项目子目录 |
@@ -134,6 +139,9 @@ MUSIC_ROOT/
 | GET | /api/image/:projectId/:subpath | 原图预览（仅 image/* MIME） |
 | GET | /api/thumbnail?path=&size= | 缩略图（自动生成缓存） |
 | GET | /api/refresh | 强制重新扫描 |
+| GET | /api/cache/size | 缩略图缓存大小与文件数 |
+| POST | /api/cache/clear | 清空缩略图与扫描缓存 |
+| GET | /api/config | 读取当前运行时配置（不含敏感字段） |
 
 ## 键盘快捷键
 
@@ -156,26 +164,50 @@ MUSIC_ROOT/
 
 ```
 asmr/
-├── server.js              # 主服务器
-├── package.json
+├── main.js                # Electron 主进程（窗口/托盘/IPC/生命周期）
+├── preload.js             # contextBridge 安全 IPC 桥
+├── server.js              # Express 服务器，导出 startServer(options)
+├── lib/
+│   └── config.js          # 配置管理器（读写 userData/config.json）
+├── package.json           # 含 electron-builder 打包配置
 ├── .gitignore
 ├── README.md              # 本文档
 ├── public/                # 静态前端
 │   ├── index.html         # SPA 主页面
+│   ├── settings.html      # 设置面板
 │   ├── css/
 │   │   ├── main.css       # 网格视图样式
-│   │   └── detail.css     # 详情页 + 播放器样式
+│   │   ├── detail.css     # 详情页 + 播放器样式
+│   │   └── settings.css   # 设置面板样式
 │   ├── js/
 │   │   ├── app.js         # 主逻辑
 │   │   ├── player.js      # 播放器核心
-│   │   └── lyrics.js      # 歌词解析与同步
+│   │   ├── lyrics.js      # 歌词解析与同步
+│   │   └── settings.js    # 设置面板逻辑（优先走 IPC，回退 HTTP）
 │   └── assets/
 │       └── default-cover.png
 ├── thumbnails/            # 缩略图缓存（git忽略）
 └── cache.json             # 数据缓存（git忽略）
 ```
 
-## 生产部署
+## 桌面应用打包
+
+打包为 Windows NSIS 安装包（`音乐播放器-Setup-0.1.0.exe`）：
+
+```bash
+npm run dist            # 生成 NSIS 安装包到 dist/
+npm run dist:portable   # 生成免安装便携版
+npm run pack            # 仅解包到 dist/win-unpacked/（不压缩，便于快速验证）
+```
+
+打包要点：
+
+- `asar` 打包，sharp 与 `@img` 原生模块通过 `asarUnpack` 解包
+- `signAndEditExecutable: false` 跳过 Windows 代码签名（无证书环境友好）
+- `cross-env CI=false` 防止 electron-builder 误触发 GitHub 发布
+- 首次启动后配置写入 `%AppData%\music-player\config.json`，可便携迁移
+
+## 生产部署（Web 模式）
 
 ### PM2 守护进程
 
@@ -190,8 +222,10 @@ pm2 startup
 
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
-| MUSIC_PATH | ~/Music | 音乐根目录 |
+| MUSIC_ROOT | server.js 内置 | 音乐根目录（Web 模式） |
 | PORT | 3000 | 服务端口 |
+
+> 桌面应用模式下不读取环境变量，配置以 `%AppData%\music-player\config.json` 为准。
 
 ## 许可证
 
@@ -228,4 +262,12 @@ MIT
 - 弹窗：歌词/图片预览 overlay 加 blur + fadeIn 动画
 - 交互：统一 cubic-bezier 过渡、按钮 `:active` 缩放、细滚动条
 
+### v0.1.0
 
+- 桌面应用化：基于 Electron 封装为独立窗口应用，单实例锁，系统托盘常驻
+- 设置面板：图形化配置音乐目录 / 缓存目录 / 服务端口 / 最小化到托盘 / 开机自启
+- 配置持久化：`%AppData%\music-player\config.json`，便携迁移
+- server.js 重构：导出 `startServer(options)`，运行时配置可通过 `getCfg()` 动态读取
+- 缓存管理：新增 `/api/cache/size`、`/api/cache/clear` 接口及设置面板一键清理
+- 安全 IPC：`contextBridge` + `contextIsolation`，preload 暴露 `window.electronAPI`
+- 打包：electron-builder NSIS 安装包，sharp 原生模块 asarUnpack 解包，跳过代码签名

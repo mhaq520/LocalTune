@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>设置 - 音乐播放器</title>
+  <link rel="stylesheet" href="/css/main.css?v=10">
+  <link rel="stylesheet" href="/css/settings.css?v=10">
+</head>
+<body class="settings-body">
+  <div class="settings-container">
+    <header class="settings-header">
+      <h1>设置</h1>
+    </header>
+
+    <section class="settings-section">
+      <h2 class="section-title">音乐目录</h2>
+      <div class="row">
+        <input type="text" id="musicRoot" class="text-input" placeholder="请选择音乐根目录" readonly>
+        <button id="btnBrowseMusic" class="btn btn-primary">浏览</button>
+      </div>
+      <p class="hint">存放音乐项目的主目录（如 Kikoeru 文件夹）</p>
+    </section>
+
+    <section class="settings-section">
+      <h2 class="section-title">缓存目录</h2>
+      <div class="row">
+        <input type="text" id="thumbnailDir" class="text-input" placeholder="缩略图缓存位置" readonly>
+        <button id="btnBrowseCache" class="btn btn-primary">浏览</button>
+      </div>
+      <p class="hint">缩略图与扫描缓存存放位置</p>
+      <div class="row cache-info">
+        <span class="cache-stat">缓存大小: <strong id="cacheSize">--</strong></span>
+        <span class="cache-stat">文件数: <strong id="cacheCount">--</strong></span>
+        <button id="btnClearCache" class="btn btn-danger">清理缓存</button>
+        <button id="btnOpenCache" class="btn btn-secondary">打开目录</button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h2 class="section-title">服务端口</h2>
+      <div class="row">
+        <input type="number" id="port" class="text-input port-input" min="1024" max="65535" value="3000">
+      </div>
+      <p class="hint">修改端口需重启应用</p>
+    </section>
+
+    <section class="settings-section">
+      <h2 class="section-title">行为</h2>
+      <label class="toggle-row">
+        <span>最小化到托盘（关闭窗口时后台运行）</span>
+        <input type="checkbox" id="minimizeToTray" class="toggle">
+      </label>
+      <label class="toggle-row">
+        <span>开机自启</span>
+        <input type="checkbox" id="autoStart" class="toggle">
+      </label>
+    </section>
+
+    <footer class="settings-footer">
+      <button id="btnSave" class="btn btn-primary btn-large">保存设置</button>
+      <span id="saveStatus" class="save-status"></span>
+    </footer>
+  </div>
+
+  <script src="/js/settings.js?v=10"></script>
+</body>
+</html>
