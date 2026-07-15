@@ -14,7 +14,7 @@ const memCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 const DEFAULT_MUSIC_ROOT = process.env.MUSIC_ROOT || '';
 const WEB_CONFIG_FILE = path.join(__dirname, 'web-config.json');
 const runtimeConfig = {
-  PORT: parseInt(process.env.PORT) || 3000,
+  PORT: parseInt(process.env.PORT) || 8080,
   MUSIC_ROOT: DEFAULT_MUSIC_ROOT,
   CACHE_FILE: path.join(__dirname, 'cache.json'),
   THUMBNAIL_DIR: path.join(__dirname, 'thumbnails')
@@ -699,11 +699,35 @@ function startServer(options = {}) {
   if ('PORT' in options) runtimeConfig.PORT = parseInt(options.PORT) || runtimeConfig.PORT;
 
   const PORT = runtimeConfig.PORT;
-  return app.listen(PORT, () => {
+  const server = app.listen(PORT, (err) => {
+    // Express 5 的 app.listen 会把同一个回调注册到 'error' 事件（见 express/lib/application.js），
+    // 因此绑定失败（EACCES/EADDRINUSE）时此回调也会被触发，并传入 err 对象。
+    // 这里通过判断 err 跳过误导性的「已启动」提示，真正的错误信息由下方的 error 处理器输出。
+    if (err) return;
     console.log(`音乐播放器已启动: http://localhost:${PORT}`);
     console.log(`音乐目录: ${runtimeConfig.MUSIC_ROOT}`);
     console.log(`缩略图缓存: ${runtimeConfig.THUMBNAIL_DIR}`);
   });
+  // 兜底：监听 error 事件以打印可操作的错误信息（避免依赖 Express 回调行为）
+  server.on('error', (err) => {
+    if (err.code === 'EACCES') {
+      console.error(`\n[错误] 无法监听端口 ${PORT}：权限被拒绝（端口可能被 Windows/Hyper-V/WSL2 保留）。`);
+      console.error(`查看保留端口范围: netsh interface ipv4 show excludedportrange protocol=tcp`);
+      console.error(`请使用未被保留的端口启动，例如：`);
+      console.error(`  PowerShell:  $env:PORT="8080"; npm start`);
+      console.error(`  CMD:         set PORT=8080 && npm start`);
+    } else if (err.code === 'EADDRINUSE') {
+      console.error(`\n[错误] 端口 ${PORT} 已被占用，请使用其他端口。`);
+    } else {
+      console.error(`\n[错误] 服务器启动失败:`, err.message);
+    }
+    // 仅在 web 模式（直接 node server.js）下退出进程；
+    // Electron 模式由 main.js 的 error 处理器接管
+    if (require.main === module) {
+      process.exit(1);
+    }
+  });
+  return server;
 }
 
 // 直接 node server.js 启动（保留命令行用法）

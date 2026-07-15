@@ -40,7 +40,7 @@ async function loadConfig() {
     if (cfg) {
       document.getElementById('musicRoot').value = cfg.musicRoot || '';
       document.getElementById('thumbnailDir').value = cfg.thumbnailDir || '';
-      document.getElementById('port').value = cfg.port || 3000;
+      document.getElementById('port').value = cfg.port || 8080;
       document.getElementById('minimizeToTray').checked = !!cfg.minimizeToTray;
       document.getElementById('autoStart').checked = !!cfg.autoStart;
     }
@@ -89,7 +89,7 @@ async function saveSettings() {
   const cfg = {
     musicRoot: document.getElementById('musicRoot').value.trim(),
     thumbnailDir: document.getElementById('thumbnailDir').value.trim(),
-    port: parseInt(document.getElementById('port').value) || 3000,
+    port: parseInt(document.getElementById('port').value) || 8080,
     minimizeToTray: document.getElementById('minimizeToTray').checked,
     autoStart: document.getElementById('autoStart').checked
   };

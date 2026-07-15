@@ -69,7 +69,7 @@ npm run dev
 npm start
 ```
 
-访问 http://localhost:3000
+访问 http://localhost:8080
 
 首次启动同样需进入设置：点击主页右上角齿轮 → 跳转 `/settings.html` → 手动输入音乐目录绝对路径 → 保存（写入项目根 `web-config.json` 并热更新）。
 
@@ -229,7 +229,7 @@ pm2 startup
 | 变量名 | 默认值 | 说明 |
 |--------|--------|------|
 | MUSIC_ROOT | server.js 内置 | 音乐根目录（Web 模式） |
-| PORT | 3000 | 服务端口 |
+| PORT | 8080 | 服务端口 |
 
 > 桌面应用模式下不读取环境变量，配置以 `%AppData%\music-player\config.json` 为准。
 
