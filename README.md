@@ -286,3 +286,12 @@ MIT
 - 设置页字体修复：settings.css 误用不存在的 CSS 变量导致字体黑色不可见，已统一为 `--text-primary` 等
 - 文件夹选择修复：`dialog.showOpenDialog` 绑定父窗口，避免弹窗被遮挡；仅 header 区域可拖动窗口
 - Web 模式下输入框解除 readonly，支持手动输入路径
+
+### v0.1.2
+
+- 修复 Web 模式静默失败：Express 5 的 `app.listen` 在端口绑定失败时仍会触发 listen 回调并打印误导性的「已启动」消息，导致服务器实际未监听但看似成功
+- 显式监听 `error` 事件：`EACCES` / `EADDRINUSE` 时打印可操作的中文错误信息（含 Windows 保留端口查询命令与替代端口启动示例）
+- Web 模式下绑定失败以非零码退出进程（原为 `0`，导致 `npm start` 误判成功）
+- 默认端口从 `3000` 改为 `8080`：`3000` 常被 Windows / Hyper-V / WSL2 划入保留端口范围（`2997-3096`），导致 `EACCES` 权限拒绝
+- 同步更新 `lib/config.js`、`settings.html`、`settings.js`、`README` 中的默认端口
+
