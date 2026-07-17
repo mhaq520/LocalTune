@@ -9,3 +9,9 @@ Thumbs.db
 .idea/
 dist/
 build/
+AGENTS.md
+docs/
+.agents/
+.uploads/
+demo/
+.gh-temp/
