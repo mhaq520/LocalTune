@@ -1,25 +1,32 @@
-// 设置页逻辑：通过 IPC 与主进程通信
-// 注意：在 Electron 渲染进程中，window.electronAPI 由 preload 注入
-// 这里使用 contextBridge 暴露的 API；若直接加载（非 Electron 环境），则回退到 HTTP
-
 const hasIPC = typeof window !== 'undefined' && window.electronAPI && window.electronAPI.invoke;
 const api = hasIPC ? window.electronAPI : null;
 
-// 包装 IPC 调用（带 fallback 到 HTTP）
+let saveInFlight = false;
+let cacheClearInFlight = false;
+let statusTimer = null;
+
 async function callIPC(channel, ...args) {
   if (api) {
     return await api.invoke(channel, ...args);
   }
-  // 非 Electron 环境的 HTTP 回退（仅查询类）
+
   if (channel === 'cache:size') {
     const r = await fetch('/api/cache/size');
     return await r.json();
   }
+
   if (channel === 'config:load') {
     const r = await fetch('/api/config');
     const j = await r.json();
-    return { musicRoot: j.musicRoot, thumbnailDir: j.thumbnailDir, port: j.port };
+    return {
+      musicRoot: j.musicRoot,
+      thumbnailDir: j.thumbnailDir,
+      port: j.port,
+      minimizeToTray: j.minimizeToTray,
+      autoStart: j.autoStart
+    };
   }
+
   return null;
 }
 
@@ -31,19 +38,19 @@ function formatBytes(bytes) {
     bytes /= 1024;
     i++;
   }
-  return bytes.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+  return `${bytes.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 async function loadConfig() {
   try {
     const cfg = await callIPC('config:load');
-    if (cfg) {
-      document.getElementById('musicRoot').value = cfg.musicRoot || '';
-      document.getElementById('thumbnailDir').value = cfg.thumbnailDir || '';
-      document.getElementById('port').value = cfg.port || 8080;
-      document.getElementById('minimizeToTray').checked = !!cfg.minimizeToTray;
-      document.getElementById('autoStart').checked = !!cfg.autoStart;
-    }
+    if (!cfg) return;
+
+    document.getElementById('musicRoot').value = cfg.musicRoot || '';
+    document.getElementById('thumbnailDir').value = cfg.thumbnailDir || '';
+    document.getElementById('port').value = cfg.port || 8080;
+    document.getElementById('minimizeToTray').checked = !!cfg.minimizeToTray;
+    document.getElementById('autoStart').checked = !!cfg.autoStart;
   } catch (e) {
     showStatus('加载配置失败: ' + e.message, 'error');
   }
@@ -52,21 +59,33 @@ async function loadConfig() {
 async function loadCacheInfo() {
   try {
     const info = await callIPC('cache:size');
-    if (info) {
-      document.getElementById('cacheSize').textContent = formatBytes(info.size);
-      document.getElementById('cacheCount').textContent = info.count;
-    }
-  } catch (e) {
+    if (!info) return;
+
+    document.getElementById('cacheSize').textContent = formatBytes(info.size);
+    document.getElementById('cacheCount').textContent = info.count;
+  } catch (_) {
     /* ignore */
   }
 }
 
 function showStatus(msg, type) {
   const el = document.getElementById('saveStatus');
+  if (!el) return;
+
   el.textContent = msg;
   el.className = 'save-status ' + (type || '');
+
+  if (statusTimer) {
+    clearTimeout(statusTimer);
+    statusTimer = null;
+  }
+
   if (msg) {
-    setTimeout(() => { el.textContent = ''; el.className = 'save-status'; }, 3000);
+    statusTimer = setTimeout(() => {
+      el.textContent = '';
+      el.className = 'save-status';
+      statusTimer = null;
+    }, 3000);
   }
 }
 
@@ -75,6 +94,7 @@ async function selectFolder(inputId) {
     alert('该功能仅在桌面应用中可用');
     return;
   }
+
   try {
     const result = await api.invoke('dialog:openFolder');
     if (result) {
@@ -86,61 +106,92 @@ async function selectFolder(inputId) {
 }
 
 async function saveSettings() {
+  if (saveInFlight) return;
+  saveInFlight = true;
+
+  const saveBtn = document.getElementById('btnSave');
+  if (saveBtn) saveBtn.disabled = true;
+
   const cfg = {
     musicRoot: document.getElementById('musicRoot').value.trim(),
     thumbnailDir: document.getElementById('thumbnailDir').value.trim(),
-    port: parseInt(document.getElementById('port').value) || 8080,
+    port: parseInt(document.getElementById('port').value, 10) || 8080,
     minimizeToTray: document.getElementById('minimizeToTray').checked,
     autoStart: document.getElementById('autoStart').checked
   };
 
   if (!cfg.musicRoot) {
     showStatus('请先选择音乐目录', 'error');
+    saveInFlight = false;
+    if (saveBtn) saveBtn.disabled = false;
     return;
   }
 
   try {
     if (api) {
-      await api.invoke('config:save', cfg);
-      showStatus('已保存，正在重启服务...', 'success');
+      const saved = await api.invoke('config:save', cfg);
+      showStatus('已保存，正在重载主界面...', 'success');
       await api.invoke('server:restart');
       await api.invoke('window:reloadMain');
-      showStatus('保存成功', 'success');
+      if (saved && saved.port) {
+        const nextUrl = `http://localhost:${saved.port}/settings.html`;
+        if (window.location.href !== nextUrl) {
+          window.location.replace(nextUrl);
+          return;
+        }
+      }
     } else {
-      // Web 模式：POST /api/config 热更新运行时并持久化到 web-config.json
       const r = await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cfg)
       });
       const j = await r.json();
-      if (r.ok && j.success) {
-        if (j.needRestart) {
-          showStatus('已保存。端口改动需重启服务生效', 'success');
-        } else {
-          showStatus('保存成功，已切换目录', 'success');
-        }
+
+      if (!r.ok || !j.success) {
+        throw new Error(j.error || '保存失败');
+      }
+
+      if (j.needRestart) {
+        showStatus('已保存，端口修改需要重启服务生效', 'success');
       } else {
-        showStatus('保存失败: ' + (j.error || '未知错误'), 'error');
+        showStatus('保存成功，已切换目录', 'success');
       }
     }
   } catch (e) {
     showStatus('保存失败: ' + e.message, 'error');
+  } finally {
+    saveInFlight = false;
+    if (saveBtn) saveBtn.disabled = false;
   }
 }
 
 async function clearCache() {
+  if (cacheClearInFlight) return;
   if (!confirm('确定清理所有缩略图和扫描缓存吗？')) return;
+
+  cacheClearInFlight = true;
+  const clearBtn = document.getElementById('btnClearCache');
+  if (clearBtn) clearBtn.disabled = true;
+
   try {
     if (api) {
       await api.invoke('cache:clear');
     } else {
-      await fetch('/api/cache/clear', { method: 'POST' });
+      const r = await fetch('/api/cache/clear', { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.success === false) {
+        throw new Error(j.error || '清理失败');
+      }
     }
+
     await loadCacheInfo();
     showStatus('缓存已清理', 'success');
   } catch (e) {
     showStatus('清理失败: ' + e.message, 'error');
+  } finally {
+    cacheClearInFlight = false;
+    if (clearBtn) clearBtn.disabled = false;
   }
 }
 
@@ -150,10 +201,15 @@ async function openCacheDir() {
     showStatus('未设置缓存目录', 'error');
     return;
   }
-  if (api) {
-    await api.invoke('shell:openPath', dir);
-  } else {
-    showStatus('仅桌面应用可打开目录', 'error');
+
+  try {
+    if (api) {
+      await api.invoke('shell:openPath', dir);
+    } else {
+      showStatus('仅桌面应用可打开目录', 'error');
+    }
+  } catch (e) {
+    showStatus('打开缓存目录失败: ' + e.message, 'error');
   }
 }
 
@@ -161,7 +217,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
   loadCacheInfo();
 
-  // Web 模式下无原生文件夹选择器：解除 readonly 允许手动输入路径
   if (!api) {
     const m = document.getElementById('musicRoot');
     const t = document.getElementById('thumbnailDir');

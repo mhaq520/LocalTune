@@ -1,9 +1,10 @@
-// 全局播放器管理
+﻿// 全局播放器管理
 const Player = {
   audio: null,
   playlist: [],
   currentIndex: -1,
   currentProjectId: '',
+  currentPlaylistKey: '',
 
   init() {
     if (this.audio) return;
@@ -18,13 +19,15 @@ const Player = {
   },
 
   // 设置播放列表
-  setPlaylist(projectId, tracks) {
-    // 如果切换了项目，重置索引
-    if (this.currentProjectId !== projectId) {
+  setPlaylist(projectId, tracks, playlistKey = projectId) {
+    const nextPlaylistKey = playlistKey || projectId || '';
+    // 如果切换了项目或目录，重置索引
+    if (this.currentProjectId !== projectId || this.currentPlaylistKey !== nextPlaylistKey) {
       this.currentIndex = -1;
     }
     this.playlist = tracks;
     this.currentProjectId = projectId;
+    this.currentPlaylistKey = nextPlaylistKey;
   },
 
   // 编码路径（每段分别编码，保留 / 作为分隔符）

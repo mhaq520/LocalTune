@@ -7,21 +7,17 @@ const NodeCache = require('node-cache');
 const cors = require('cors');
 const crypto = require('crypto');
 
-// 内存缓存，TTL 5分钟
 const memCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
-// 运行时配置（可由 startServer(options) 覆盖，路由内通过 getCfg() 读取）
 const DEFAULT_MUSIC_ROOT = process.env.MUSIC_ROOT || '';
 const WEB_CONFIG_FILE = path.join(__dirname, 'web-config.json');
 const runtimeConfig = {
-  PORT: parseInt(process.env.PORT) || 8080,
+  PORT: parseInt(process.env.PORT, 10) || 8080,
   MUSIC_ROOT: DEFAULT_MUSIC_ROOT,
   CACHE_FILE: path.join(__dirname, 'cache.json'),
   THUMBNAIL_DIR: path.join(__dirname, 'thumbnails')
 };
 
-// Web 模式（直接 node server.js）下读取 web-config.json 覆盖默认值
-// Electron 模式下配置由 lib/config.js 管理，不读此文件
 function loadWebConfig() {
   try {
     if (fs.existsSync(WEB_CONFIG_FILE)) {
@@ -29,97 +25,105 @@ function loadWebConfig() {
       if (c.musicRoot) runtimeConfig.MUSIC_ROOT = c.musicRoot;
       if (c.thumbnailDir) runtimeConfig.THUMBNAIL_DIR = c.thumbnailDir;
       if (c.cacheFile) runtimeConfig.CACHE_FILE = c.cacheFile;
-      // 端口不在运行时热改（需重启 node 进程），仅记录
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // ignore
+  }
 }
 loadWebConfig();
 
-function getCfg() { return runtimeConfig; }
+function getCfg() {
+  return runtimeConfig;
+}
+
+function resolvePathWithinRoot(root, ...segments) {
+  if (!root) return null;
+  const normalizedRoot = path.resolve(root);
+  const resolved = path.resolve(normalizedRoot, ...segments);
+  const relative = path.relative(normalizedRoot, resolved);
+  if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+    return resolved;
+  }
+  return null;
+}
+
+function normalizeRequestPath(requestPath) {
+  if (!requestPath) return '';
+  try {
+    return decodeURIComponent(requestPath).replace(/^[/\\]+/, '');
+  } catch (e) {
+    return null;
+  }
+}
+
+function sendResolvedFile(res, root, requestPath, next) {
+  const normalized = normalizeRequestPath(requestPath);
+  if (normalized === null) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
+
+  try {
+    const resolved = resolvePathWithinRoot(root, normalized);
+    if (!resolved) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+      return res.sendFile(resolved);
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  return next();
+}
 
 const app = express();
 
-// 中间件
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-// 注意：MUSIC_ROOT / THUMBNAIL_DIR 在请求时通过 getCfg() 读取，便于运行时切换
 app.use((req, res, next) => {
   res.locals.musicRoot = getCfg().MUSIC_ROOT;
   res.locals.thumbnailDir = getCfg().THUMBNAIL_DIR;
   next();
 });
 app.use('/music', (req, res, next) => {
-  // 动态静态目录（express.static 在启动时绑定，这里用 inline middleware 重新映射）
   const root = getCfg().MUSIC_ROOT;
   if (!root) return next();
-  try {
-    const rel = decodeURIComponent(req.path.replace(/^\//, ''));
-    const p = path.join(root, rel);
-    if (fs.existsSync(p) && fs.statSync(p).isFile()) return res.sendFile(p);
-  } catch (e) { /* ignore */ }
-  next();
+  return sendResolvedFile(res, root, req.path, next);
 });
 app.use('/thumbnails', (req, res, next) => {
-  try {
-    const rel = decodeURIComponent(req.path.replace(/^\//, ''));
-    const p = path.join(getCfg().THUMBNAIL_DIR, rel);
-    if (fs.existsSync(p) && fs.statSync(p).isFile()) return res.sendFile(p);
-  } catch (e) { /* ignore */ }
-  next();
+  return sendResolvedFile(res, getCfg().THUMBNAIL_DIR, req.path, next);
 });
 
-// ---------- 工具函数 ----------
-
-// 音频扩展名
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.ogg', '.aac', '.wma']);
-
-// 图片扩展名
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']);
-
-// 歌词扩展名
 const LYRICS_EXTS = new Set(['.lrc', '.vtt']);
 
-// 自然排序
 function naturalSort(a, b) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 }
 
-// MD5
 function md5(str) {
   return crypto.createHash('md5').update(str).digest('hex');
 }
 
-// 安全检查：防止路径遍历
-function isSafePath(projectId, subPath) {
-  const checkParts = (p) => {
-    if (!p) return true;
-    return p.split(/[\\/]/).every(part => part !== '..');
-  };
-  return checkParts(projectId) && checkParts(subPath);
-}
-
-// 获取项目下的子目录列表（用于主页卡片展示）
 function getProjectSubdirs(projectDir) {
   if (!fs.existsSync(projectDir)) return [];
   try {
     return fs.readdirSync(projectDir, { withFileTypes: true })
-      .filter(e => e.isDirectory())
-      .map(e => e.name);
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
   } catch (e) {
     return [];
   }
 }
 
-// ---------- 扫描逻辑 ----------
-
-// 扫描单个小项目的信息
 async function scanSubProject(projectDir, dirName, parentName) {
   const illustDir = path.join(projectDir, '插图');
   const mainDir = path.join(projectDir, '正篇');
   const nameFile = path.join(projectDir, 'name.txt');
 
-  // 读取中文名
   let chineseName = '';
   try {
     const nameContent = await fs.readFile(nameFile, 'utf-8');
@@ -128,17 +132,13 @@ async function scanSubProject(projectDir, dirName, parentName) {
     chineseName = '';
   }
 
-  // 获取封面
   let coverPath = '';
   if (fs.existsSync(illustDir)) {
     const illustFiles = await fs.readdir(illustDir);
-    const imgFiles = illustFiles.filter(f => {
-      const ext = path.extname(f).toLowerCase();
-      return IMAGE_EXTS.has(ext);
-    });
+    const imgFiles = illustFiles.filter((f) => IMAGE_EXTS.has(path.extname(f).toLowerCase()));
 
     if (imgFiles.length > 0) {
-      const fengmian = imgFiles.find(f => f.includes('封面'));
+      const fengmian = imgFiles.find((f) => f.includes('封面'));
       if (fengmian) {
         coverPath = path.join(illustDir, fengmian);
       } else {
@@ -152,7 +152,9 @@ async function scanSubProject(projectDir, dirName, parentName) {
               minArea = area;
               coverPath = fullPath;
             }
-          } catch (e) { /* skip */ }
+          } catch (e) {
+            // skip unreadable image
+          }
         }
         if (!coverPath) {
           coverPath = path.join(illustDir, imgFiles[0]);
@@ -161,7 +163,6 @@ async function scanSubProject(projectDir, dirName, parentName) {
     }
   }
 
-  // 统计音频文件数
   let audioCount = 0;
   if (fs.existsSync(mainDir)) {
     audioCount = countAudioFiles(mainDir);
@@ -169,17 +170,17 @@ async function scanSubProject(projectDir, dirName, parentName) {
 
   const subdirs = getProjectSubdirs(projectDir);
 
-  // 查找 RJ 编号（项目目录下的文件或文件夹名匹配 RJ + 数字）
   let rjCode = '';
   try {
     const allEntries = await fs.readdir(projectDir);
-    const rjMatch = allEntries.find(e => /^RJ\d+/i.test(e));
+    const rjMatch = allEntries.find((e) => /^RJ\d+/i.test(e));
     if (rjMatch) {
       rjCode = rjMatch;
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // ignore
+  }
 
-  // id 用相对路径，前端 encodeURIComponent 传递
   const id = parentName ? `${parentName}/${dirName}` : dirName;
 
   return {
@@ -193,14 +194,11 @@ async function scanSubProject(projectDir, dirName, parentName) {
   };
 }
 
-// 判断一个目录是否是"小项目"（包含正篇或音频文件）
 function isProjectDir(dirPath) {
   try {
-    // 有正篇目录就是项目
     if (fs.existsSync(path.join(dirPath, '正篇'))) return true;
-    // 目录下直接有音频文件也是项目
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-    return entries.some(e => e.isFile() && AUDIO_EXTS.has(path.extname(e.name).toLowerCase()));
+    return entries.some((e) => e.isFile() && AUDIO_EXTS.has(path.extname(e.name).toLowerCase()));
   } catch (e) {
     return false;
   }
@@ -216,29 +214,19 @@ async function scanProjects() {
   }
 
   const entries = await fs.readdir(MUSIC_ROOT, { withFileTypes: true });
-  const topDirs = entries
-    .filter(e => e.isDirectory())
-    .map(e => e.name);
-
+  const topDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
   topDirs.sort(naturalSort);
 
   const projects = [];
 
   for (const topDir of topDirs) {
     const topDirPath = path.join(MUSIC_ROOT, topDir);
-
-    // 判断 MUSIC_ROOT 下的目录是"大项目"还是"小项目"
     if (isProjectDir(topDirPath)) {
-      // 直接就是小项目
       const project = await scanSubProject(topDirPath, topDir, '');
       projects.push(project);
     } else {
-      // 是大项目，扫描其子目录
       const subEntries = await fs.readdir(topDirPath, { withFileTypes: true });
-      const subDirs = subEntries
-        .filter(e => e.isDirectory())
-        .map(e => e.name);
-
+      const subDirs = subEntries.filter((e) => e.isDirectory()).map((e) => e.name);
       subDirs.sort(naturalSort);
 
       for (const subDir of subDirs) {
@@ -263,11 +251,11 @@ function countAudioFiles(dir) {
         count++;
       }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // ignore
+  }
   return count;
 }
-
-// ---------- 浏览项目目录 ----------
 
 function browseDir(dirPath, basePath) {
   const entries = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -277,56 +265,53 @@ function browseDir(dirPath, basePath) {
   for (const e of entries) {
     if (e.isDirectory()) {
       dirs.push({ name: e.name, type: 'dir' });
-    } else {
-      const ext = path.extname(e.name).toLowerCase();
-      const stat = fs.statSync(path.join(dirPath, e.name));
-      const isAudio = AUDIO_EXTS.has(ext);
-      const isLyrics = LYRICS_EXTS.has(ext);
-      const isImage = IMAGE_EXTS.has(ext);
+      continue;
+    }
 
-      // 查找对应的歌词文件（优先同名，其次 文件名+扩展名，最后目录内任意 lrc/vtt）
-      let lrcPath = null;
-      if (isAudio) {
-        const baseName = e.name.replace(/\.[^.]+$/, '');
-        // 1. 先找 baseName.lrc / baseName.vtt (如 tr00_xxx.vtt)
+    const ext = path.extname(e.name).toLowerCase();
+    const stat = fs.statSync(path.join(dirPath, e.name));
+    const isAudio = AUDIO_EXTS.has(ext);
+    const isLyrics = LYRICS_EXTS.has(ext);
+    const isImage = IMAGE_EXTS.has(ext);
+
+    let lrcPath = null;
+    if (isAudio) {
+      const baseName = e.name.replace(/\.[^.]+$/, '');
+      for (const lrcExt of ['.lrc', '.vtt']) {
+        const candidate = path.join(dirPath, baseName + lrcExt);
+        if (fs.existsSync(candidate)) {
+          lrcPath = baseName + lrcExt;
+          break;
+        }
+      }
+      if (!lrcPath) {
         for (const lrcExt of ['.lrc', '.vtt']) {
-          const candidate = path.join(dirPath, baseName + lrcExt);
+          const candidate = path.join(dirPath, e.name + lrcExt);
           if (fs.existsSync(candidate)) {
-            lrcPath = baseName + lrcExt;
+            lrcPath = e.name + lrcExt;
             break;
           }
         }
-        // 2. 完整文件名+.lrc / .vtt (如 tr00_xxx.mp3.vtt)
-        if (!lrcPath) {
-          for (const lrcExt of ['.lrc', '.vtt']) {
-            const candidate = path.join(dirPath, e.name + lrcExt);
-            if (fs.existsSync(candidate)) {
-              lrcPath = e.name + lrcExt;
+      }
+      if (!lrcPath) {
+        for (const otherFile of entries) {
+          if (otherFile.isFile()) {
+            const otherExt = path.extname(otherFile.name).toLowerCase();
+            if (otherExt === '.lrc' || otherExt === '.vtt') {
+              lrcPath = otherFile.name;
               break;
             }
           }
         }
-        // 3. 没找到则找目录内任意 .lrc / .vtt
-        if (!lrcPath) {
-          for (const otherFile of entries) {
-            if (otherFile.isFile()) {
-              const otherExt = path.extname(otherFile.name).toLowerCase();
-              if (otherExt === '.lrc' || otherExt === '.vtt') {
-                lrcPath = otherFile.name;
-                break;
-              }
-            }
-          }
-        }
       }
-
-      files.push({
-        name: e.name,
-        type: isAudio ? 'audio' : (isImage ? 'image' : (isLyrics ? 'lyrics' : 'file')),
-        size: stat.size,
-        lrcPath
-      });
     }
+
+    files.push({
+      name: e.name,
+      type: isAudio ? 'audio' : (isImage ? 'image' : (isLyrics ? 'lyrics' : 'file')),
+      size: stat.size,
+      lrcPath
+    });
   }
 
   dirs.sort((a, b) => naturalSort(a.name, b.name));
@@ -334,8 +319,6 @@ function browseDir(dirPath, basePath) {
 
   return { dirs, files };
 }
-
-// ---------- 缓存管理 ----------
 
 function getCachedProjects() {
   const cached = memCache.get('projects');
@@ -350,7 +333,9 @@ function getCachedProjects() {
         return fileCache;
       }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // ignore
+  }
 
   return null;
 }
@@ -359,12 +344,15 @@ function setCachedProjects(data) {
   memCache.set('projects', data);
   try {
     fs.writeJsonSync(getCfg().CACHE_FILE, data);
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    // ignore
+  }
 }
 
-// ---------- API 路由 ----------
+function clearProjectScanCache() {
+  memCache.del('projects');
+}
 
-// 获取所有项目
 app.get('/api/projects', async (req, res) => {
   try {
     let data = getCachedProjects();
@@ -378,31 +366,32 @@ app.get('/api/projects', async (req, res) => {
   }
 });
 
-// 浏览项目目录
 app.get('/api/browse/:projectId', (req, res) => {
   try {
     if (!getCfg().MUSIC_ROOT) {
       return res.status(400).json({ error: '请先在设置中选择音乐目录' });
     }
+
     const { projectId } = req.params;
-    if (!isSafePath(projectId)) {
+    const projectDir = resolvePathWithinRoot(getCfg().MUSIC_ROOT, projectId);
+    if (!projectDir) {
       return res.status(400).json({ error: 'Invalid project ID' });
     }
 
-    const projectDir = path.join(getCfg().MUSIC_ROOT, projectId);
     if (!fs.existsSync(projectDir)) {
       return res.status(404).json({ error: 'Project not found' });
     }
 
     const result = browseDir(projectDir, '');
-    // 返回项目名和中文名
     let chineseName = '';
     try {
       const nameFile = path.join(projectDir, 'name.txt');
       if (fs.existsSync(nameFile)) {
         chineseName = fs.readFileSync(nameFile, 'utf-8').trim();
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      // ignore
+    }
 
     res.json({ ...result, projectId, name: projectId, chineseName });
   } catch (err) {
@@ -410,20 +399,19 @@ app.get('/api/browse/:projectId', (req, res) => {
   }
 });
 
-// 浏览项目子目录
 app.get('/api/browse/:projectId/*subpath', (req, res) => {
   try {
     if (!getCfg().MUSIC_ROOT) {
       return res.status(400).json({ error: '请先在设置中选择音乐目录' });
     }
+
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
-
-    if (!isSafePath(projectId, subPath)) {
+    const fullPath = resolvePathWithinRoot(getCfg().MUSIC_ROOT, projectId, subPath);
+    if (!fullPath) {
       return res.status(400).json({ error: 'Invalid path' });
     }
 
-    const fullPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
     if (!fs.existsSync(fullPath)) {
       return res.status(404).json({ error: 'Directory not found' });
     }
@@ -435,20 +423,19 @@ app.get('/api/browse/:projectId/*subpath', (req, res) => {
   }
 });
 
-// 缩略图服务
 app.get('/api/thumbnail', async (req, res) => {
   try {
     if (!getCfg().MUSIC_ROOT) {
       return res.status(400).json({ error: '请先在设置中选择音乐目录' });
     }
+
     const { path: imgPath, size } = req.query;
     if (!imgPath) {
       return res.status(400).json({ error: 'Missing path parameter' });
     }
 
-    const resolved = path.resolve(imgPath);
-    const normalizedRoot = path.resolve(getCfg().MUSIC_ROOT);
-    if (!resolved.startsWith(normalizedRoot)) {
+    const resolved = resolvePathWithinRoot(path.resolve(getCfg().MUSIC_ROOT), normalizeRequestPath(imgPath));
+    if (!resolved) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -457,8 +444,7 @@ app.get('/api/thumbnail', async (req, res) => {
     }
 
     const hash = md5(resolved);
-    const s = parseInt(size) || 200;
-    // 缩略图按 4:3 生成，与卡片展示比例一致，避免前端拉伸变形
+    const s = parseInt(size, 10) || 200;
     const sh = Math.round(s * 3 / 4);
     const thumbName = `${hash}_${s}x${sh}.jpg`;
     const THUMBNAIL_DIR = getCfg().THUMBNAIL_DIR;
@@ -480,20 +466,18 @@ app.get('/api/thumbnail', async (req, res) => {
   }
 });
 
-// 原图服务（用于浏览器内图片预览，保留原始宽高比，不裁剪）
 app.get('/api/image/:projectId/*subpath', (req, res) => {
   try {
     if (!getCfg().MUSIC_ROOT) {
       return res.status(400).json({ error: '请先在设置中选择音乐目录' });
     }
+
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
-
-    if (!isSafePath(projectId, subPath)) {
+    const imgPath = resolvePathWithinRoot(getCfg().MUSIC_ROOT, projectId, subPath);
+    if (!imgPath) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-
-    const imgPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
 
     if (!fs.existsSync(imgPath)) {
       return res.status(404).json({ error: 'Image not found' });
@@ -512,10 +496,9 @@ app.get('/api/image/:projectId/*subpath', (req, res) => {
   }
 });
 
-// 强制刷新缓存
 app.get('/api/refresh', async (req, res) => {
   try {
-    memCache.del('projects');
+    clearProjectScanCache();
     const data = await scanProjects();
     setCachedProjects(data);
     res.json({ success: true, projectCount: data.projects.length });
@@ -524,7 +507,6 @@ app.get('/api/refresh', async (req, res) => {
   }
 });
 
-// 缓存大小查询
 app.get('/api/cache/size', async (req, res) => {
   try {
     const THUMBNAIL_DIR = getCfg().THUMBNAIL_DIR;
@@ -546,7 +528,6 @@ app.get('/api/cache/size', async (req, res) => {
   }
 });
 
-// 清理缩略图缓存
 app.post('/api/cache/clear', async (req, res) => {
   try {
     const THUMBNAIL_DIR = getCfg().THUMBNAIL_DIR;
@@ -556,16 +537,18 @@ app.post('/api/cache/clear', async (req, res) => {
         await fs.remove(path.join(THUMBNAIL_DIR, f));
       }
     }
-    // 同时清除项目扫描缓存
-    memCache.del('projects');
-    try { await fs.remove(getCfg().CACHE_FILE); } catch (e) { /* ignore */ }
+    clearProjectScanCache();
+    try {
+      await fs.remove(getCfg().CACHE_FILE);
+    } catch (e) {
+      // ignore
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 获取当前配置（前端设置页可读取展示）
 app.get('/api/config', (req, res) => {
   const cfg = getCfg();
   res.json({
@@ -575,24 +558,30 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// 保存配置（Web 模式专用：写入 web-config.json 并热更新运行时）
-// Electron 模式下由主进程 IPC 处理，不走此接口
 app.post('/api/config', (req, res) => {
   try {
     const { musicRoot, thumbnailDir, port } = req.body || {};
     const toSave = {
       musicRoot: (musicRoot || '').trim(),
       thumbnailDir: (thumbnailDir || '').trim(),
-      port: parseInt(port) || runtimeConfig.PORT
+      port: parseInt(port, 10) || runtimeConfig.PORT
     };
-    // 热更新运行时（端口除外，需重启 node 进程）
-    if (req.body && 'musicRoot' in req.body) runtimeConfig.MUSIC_ROOT = toSave.musicRoot;
-    if (req.body && 'thumbnailDir' in req.body) runtimeConfig.THUMBNAIL_DIR = toSave.thumbnailDir;
-    // 持久化
+
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'musicRoot')) {
+      runtimeConfig.MUSIC_ROOT = toSave.musicRoot;
+    }
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'thumbnailDir')) {
+      runtimeConfig.THUMBNAIL_DIR = toSave.thumbnailDir;
+    }
+
     fs.writeJsonSync(WEB_CONFIG_FILE, toSave, { spaces: 2 });
-    // 清除扫描缓存以便新目录生效
-    memCache.del('projects');
-    try { fs.removeSync(getCfg().CACHE_FILE); } catch (e) { /* ignore */ }
+    clearProjectScanCache();
+    try {
+      fs.removeSync(getCfg().CACHE_FILE);
+    } catch (e) {
+      // ignore
+    }
+
     res.json({
       success: true,
       portChanged: toSave.port !== runtimeConfig.PORT,
@@ -603,20 +592,18 @@ app.post('/api/config', (req, res) => {
   }
 });
 
-// 音频流服务（支持 Range 请求，支持子目录）
 app.get('/api/audio/:projectId/*subpath', (req, res) => {
   try {
     if (!getCfg().MUSIC_ROOT) {
       return res.status(400).json({ error: '请先在设置中选择音乐目录' });
     }
+
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
-
-    if (!isSafePath(projectId, subPath)) {
+    const audioPath = resolvePathWithinRoot(getCfg().MUSIC_ROOT, projectId, subPath);
+    if (!audioPath) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-
-    const audioPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
 
     if (!fs.existsSync(audioPath)) {
       return res.status(404).json({ error: 'Audio file not found' });
@@ -655,20 +642,18 @@ app.get('/api/audio/:projectId/*subpath', (req, res) => {
   }
 });
 
-// 歌词文件服务（LRC / VTT）
 app.get('/api/lyrics/:projectId/*subpath', (req, res) => {
   try {
     if (!getCfg().MUSIC_ROOT) {
       return res.status(400).json({ error: '请先在设置中选择音乐目录' });
     }
+
     const { projectId, subpath } = req.params;
     const subPath = Array.isArray(subpath) ? subpath.join('/') : (subpath || '');
-
-    if (!isSafePath(projectId, subPath)) {
+    const lrcPath = resolvePathWithinRoot(getCfg().MUSIC_ROOT, projectId, subPath);
+    if (!lrcPath) {
       return res.status(400).json({ error: 'Invalid path' });
     }
-
-    const lrcPath = path.join(getCfg().MUSIC_ROOT, projectId, subPath);
 
     if (!fs.existsSync(lrcPath)) {
       return res.status(404).json({ error: 'Lyrics file not found' });
@@ -680,60 +665,56 @@ app.get('/api/lyrics/:projectId/*subpath', (req, res) => {
   }
 });
 
-// SPA 路由
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// 旧版详情页路由重定向到主页
 app.get('/detail/:id', (req, res) => {
   res.redirect('/');
 });
 
-// 启动服务器：可传入 { PORT, MUSIC_ROOT, THUMBNAIL_DIR, CACHE_FILE } 覆盖默认值
-// 返回 http.Server 实例，便于 Electron 主进程关闭/重启
 function startServer(options = {}) {
   if ('MUSIC_ROOT' in options) runtimeConfig.MUSIC_ROOT = options.MUSIC_ROOT;
   if ('THUMBNAIL_DIR' in options) runtimeConfig.THUMBNAIL_DIR = options.THUMBNAIL_DIR;
   if ('CACHE_FILE' in options) runtimeConfig.CACHE_FILE = options.CACHE_FILE;
-  if ('PORT' in options) runtimeConfig.PORT = parseInt(options.PORT) || runtimeConfig.PORT;
+  if ('PORT' in options) runtimeConfig.PORT = parseInt(options.PORT, 10) || runtimeConfig.PORT;
 
   const PORT = runtimeConfig.PORT;
-  const server = app.listen(PORT, (err) => {
-    // Express 5 的 app.listen 会把同一个回调注册到 'error' 事件（见 express/lib/application.js），
-    // 因此绑定失败（EACCES/EADDRINUSE）时此回调也会被触发，并传入 err 对象。
-    // 这里通过判断 err 跳过误导性的「已启动」提示，真正的错误信息由下方的 error 处理器输出。
-    if (err) return;
+  const server = app.listen(PORT);
+
+  server.once('listening', () => {
     console.log(`音乐播放器已启动: http://localhost:${PORT}`);
     console.log(`音乐目录: ${runtimeConfig.MUSIC_ROOT}`);
     console.log(`缩略图缓存: ${runtimeConfig.THUMBNAIL_DIR}`);
   });
-  // 兜底：监听 error 事件以打印可操作的错误信息（避免依赖 Express 回调行为）
+
   server.on('error', (err) => {
     if (err.code === 'EACCES') {
-      console.error(`\n[错误] 无法监听端口 ${PORT}：权限被拒绝（端口可能被 Windows/Hyper-V/WSL2 保留）。`);
-      console.error(`查看保留端口范围: netsh interface ipv4 show excludedportrange protocol=tcp`);
-      console.error(`请使用未被保留的端口启动，例如：`);
-      console.error(`  PowerShell:  $env:PORT="8080"; npm start`);
-      console.error(`  CMD:         set PORT=8080 && npm start`);
+      console.error(`\n[错误] 无法监听端口 ${PORT}: 权限被拒绝。`);
+      console.error('请使用未被保留的端口启动。');
     } else if (err.code === 'EADDRINUSE') {
       console.error(`\n[错误] 端口 ${PORT} 已被占用，请使用其他端口。`);
     } else {
       console.error(`\n[错误] 服务器启动失败:`, err.message);
     }
-    // 仅在 web 模式（直接 node server.js）下退出进程；
-    // Electron 模式由 main.js 的 error 处理器接管
+
     if (require.main === module) {
       process.exit(1);
     }
   });
+
   return server;
 }
 
-// 直接 node server.js 启动（保留命令行用法）
 if (require.main === module) {
   startServer();
 }
 
-// 导出供 Electron 主进程调用
-module.exports = { app, startServer, getCfg, runtimeConfig };
+module.exports = {
+  app,
+  startServer,
+  getCfg,
+  runtimeConfig,
+  clearProjectScanCache,
+  resolvePathWithinRoot
+};

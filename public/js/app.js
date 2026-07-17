@@ -1,7 +1,5 @@
-// ========== 工具函数 ==========
-// 编码路径（每段分别 encodeURIComponent，保留 /）
 function encodePath(p) {
-  return p.split('/').map(s => encodeURIComponent(s)).join('/');
+  return p.split('/').map((s) => encodeURIComponent(s)).join('/');
 }
 
 function escapeHtml(str) {
@@ -14,7 +12,11 @@ function escapeAttr(str) {
   return str.replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
-// ========== 视图切换 ==========
+let projectListRequestSeq = 0;
+let projectDetailRequestSeq = 0;
+let directoryRequestSeq = 0;
+let currentViewSeq = 0;
+
 const gridView = document.getElementById('gridView');
 const detailView = document.getElementById('detailView');
 
@@ -28,29 +30,33 @@ function showDetail() {
   detailView.classList.remove('hidden');
 }
 
-// ========== 网格视图 ==========
 async function loadProjects() {
+  const requestSeq = ++projectListRequestSeq;
   const grid = document.getElementById('projectGrid');
   grid.innerHTML = '<div class="loading">正在扫描音乐目录...</div>';
 
   try {
     const res = await fetch('/api/projects');
     const data = await res.json();
+    if (requestSeq !== projectListRequestSeq) return;
 
     if (data.error) {
       grid.innerHTML = `<div class="empty">${escapeHtml(data.error)}</div>`;
       return;
     }
 
-    const projects = data.projects;
-    document.getElementById('projectCount').textContent = `${projects.length} 个项目`;
+    const projects = data.projects || [];
+    const projectCount = document.getElementById('projectCount');
+    if (projectCount) {
+      projectCount.textContent = `${projects.length} 个项目`;
+    }
 
     if (projects.length === 0) {
       grid.innerHTML = '<div class="empty">未找到项目文件夹</div>';
       return;
     }
 
-    grid.innerHTML = projects.map(p => {
+    grid.innerHTML = projects.map((p) => {
       const displayName = p.rjCode || p.chineseName || p.name;
       const imgSrc = p.coverPath
         ? `/api/thumbnail?path=${encodeURIComponent(p.coverPath)}&size=400`
@@ -68,6 +74,7 @@ async function loadProjects() {
       `;
     }).join('');
   } catch (err) {
+    if (requestSeq !== projectListRequestSeq) return;
     grid.innerHTML = `<div class="empty">加载失败: ${escapeHtml(err.message)}</div>`;
   }
 }
@@ -77,7 +84,6 @@ window.openProject = function (id) {
   loadProjectDetail(id);
 };
 
-// ========== 详情视图 ==========
 let currentProjectId = '';
 let currentPath = '';
 let audioFiles = [];
@@ -95,44 +101,48 @@ document.getElementById('breadcrumb').addEventListener('click', (e) => {
 });
 
 async function loadProjectDetail(projectId) {
-  currentProjectId = projectId;
-  currentPath = '';
-  projectInfo = null;
+  const viewSeq = ++currentViewSeq;
+  const requestSeq = ++projectDetailRequestSeq;
 
   try {
     const res = await fetch(`/api/browse/${encodeURIComponent(projectId)}`);
     const data = await res.json();
+    if (requestSeq !== projectDetailRequestSeq || viewSeq !== currentViewSeq) return;
 
     if (data.error) {
       document.getElementById('fileList').innerHTML = `<div class="loading">${escapeHtml(data.error)}</div>`;
       return;
     }
 
+    currentProjectId = projectId;
+    currentPath = '';
     projectInfo = data;
     document.getElementById('projectTitle').textContent = data.chineseName || data.name;
     document.getElementById('projectSubtitle').textContent = data.name;
 
-    // 如果有正篇目录，直接进入
-    const hasMain = data.dirs.some(d => d.name === '正篇');
+    const hasMain = Array.isArray(data.dirs) && data.dirs.some((d) => d.name === '正篇');
     if (hasMain) {
-      navigateTo('正篇');
+      navigateTo('正篇', projectId, viewSeq);
     } else {
-      navigateTo('');
+      navigateTo('', projectId, viewSeq);
     }
   } catch (err) {
+    if (requestSeq !== projectDetailRequestSeq || viewSeq !== currentViewSeq) return;
     document.getElementById('fileList').innerHTML = `<div class="loading">加载失败: ${escapeHtml(err.message)}</div>`;
   }
 }
 
-async function navigateTo(subPath) {
-  currentPath = subPath;
-  updateBreadcrumb(subPath);
-  await loadDirectory(subPath);
+async function navigateTo(subPath, projectId = currentProjectId, viewSeq = currentViewSeq) {
+  if (!projectId) return;
+  currentPath = subPath || '';
+  updateBreadcrumb(currentPath);
+  await loadDirectory(currentPath, projectId, viewSeq);
 }
 
 function updateBreadcrumb(subPath) {
   const bc = document.getElementById('breadcrumb');
-  let html = `<span class="breadcrumb-item${subPath === '' ? ' active' : ''}" data-path="">${projectInfo ? (projectInfo.chineseName || projectInfo.name) : '根目录'}</span>`;
+  const rootName = projectInfo ? (projectInfo.chineseName || projectInfo.name) : '根目录';
+  let html = `<span class="breadcrumb-item${subPath === '' ? ' active' : ''}" data-path="">${escapeHtml(rootName)}</span>`;
 
   if (subPath) {
     const parts = subPath.replace(/\\/g, '/').split('/').filter(Boolean);
@@ -143,35 +153,49 @@ function updateBreadcrumb(subPath) {
       html += ` <span class="sep">/</span> <span class="breadcrumb-item${isLast ? ' active' : ''}" data-path="${escapeAttr(accumulated)}">${escapeHtml(part)}</span>`;
     }
   }
+
   bc.innerHTML = html;
 }
 
-async function loadDirectory(subPath) {
+async function loadDirectory(subPath, projectId = currentProjectId, viewSeq = currentViewSeq) {
+  const requestSeq = ++directoryRequestSeq;
   const container = document.getElementById('fileList');
+  const requestedPath = subPath || '';
   container.innerHTML = '<div class="loading">加载中...</div>';
 
   try {
-    const url = subPath
-      ? `/api/browse/${encodeURIComponent(currentProjectId)}/${encodePath(subPath)}`
-      : `/api/browse/${encodeURIComponent(currentProjectId)}`;
+    const url = requestedPath
+      ? `/api/browse/${encodeURIComponent(projectId)}/${encodePath(requestedPath)}`
+      : `/api/browse/${encodeURIComponent(projectId)}`;
 
     const res = await fetch(url);
     const data = await res.json();
+    if (
+      requestSeq !== directoryRequestSeq ||
+      viewSeq !== currentViewSeq ||
+      projectId !== currentProjectId ||
+      requestedPath !== currentPath
+    ) {
+      return;
+    }
 
     if (data.error) {
       container.innerHTML = `<div class="loading">${escapeHtml(data.error)}</div>`;
       return;
     }
 
-    // 收集音频文件
-    audioFiles = data.files.filter(f => f.type === 'audio').map(f => ({
+    audioFiles = (data.files || []).filter((f) => f.type === 'audio').map((f) => ({
       ...f,
-      relPath: subPath ? `${subPath}/${f.name}` : f.name
+      relPath: requestedPath ? `${requestedPath}/${f.name}` : f.name
     }));
-    Player.setPlaylist(currentProjectId, audioFiles);
 
-    renderFileList(data.dirs, data.files, subPath);
+    Player.setPlaylist(projectId, audioFiles, requestedPath);
+    renderFileList(data.dirs || [], data.files || [], requestedPath);
+    Player.updateNowPlaying();
+    Player.updateTrackListHighlight();
+    loadLyricsForCurrent();
   } catch (err) {
+    if (requestSeq !== directoryRequestSeq || viewSeq !== currentViewSeq) return;
     container.innerHTML = `<div class="loading">加载失败: ${escapeHtml(err.message)}</div>`;
   }
 }
@@ -227,32 +251,26 @@ function renderFileList(dirs, files, subPath) {
   container.innerHTML = html;
 }
 
-// ========== 播放控制 ==========
 window.playTrack = function (index) {
   Player.play(index);
-  loadLyricsForCurrent();
+  void loadLyricsForCurrent();
 };
-
-// navigateTo 已经是顶层函数声明，自动挂载到 window，不需要再赋值
 
 function loadLyricsForCurrent() {
   const track = audioFiles[Player.currentIndex];
   if (track && track.lrcPath) {
-    // lrcPath 可能是相对路径（如 "正篇/song.lrc"）或纯文件名
     let lrcRelPath;
     if (track.lrcPath.includes('/') || track.lrcPath.includes('\\')) {
       lrcRelPath = track.lrcPath.replace(/\\/g, '/');
     } else {
       lrcRelPath = currentPath ? `${currentPath}/${track.lrcPath}` : track.lrcPath;
     }
-    Lyrics.load(`/api/lyrics/${encodeURIComponent(currentProjectId)}/${encodePath(lrcRelPath)}`);
+    void Lyrics.load(`/api/lyrics/${encodeURIComponent(currentProjectId)}/${encodePath(lrcRelPath)}`);
   } else {
-    Lyrics.current = [];
-    Lyrics.render();
+    void Lyrics.load(null);
   }
 }
 
-// 播放器按钮
 document.getElementById('playBtn').addEventListener('click', () => {
   if (!Player.audio.src && Player.playlist.length > 0) {
     window.playTrack(0);
@@ -260,51 +278,71 @@ document.getElementById('playBtn').addEventListener('click', () => {
     Player.togglePlay();
   }
 });
+
 document.getElementById('prevBtn').addEventListener('click', () => {
   Player.prev();
   loadLyricsForCurrent();
 });
+
 document.getElementById('nextBtn').addEventListener('click', () => {
   Player.next();
   loadLyricsForCurrent();
 });
 
-// 进度条
 document.getElementById('progressBar').addEventListener('input', (e) => {
   Player.seek(e.target.value);
 });
 
-// 音量
 document.getElementById('volumeBar').addEventListener('input', (e) => {
   Player.setVolume(e.target.value);
 });
 
-// 歌词弹窗
 document.getElementById('lyricsToggleBtn').addEventListener('click', () => Lyrics.toggle());
 document.getElementById('lyricsCloseBtn').addEventListener('click', () => Lyrics.toggle());
 Lyrics.initDrag();
 Lyrics.init();
 
-// 图片预览弹窗
 const imageOverlay = document.getElementById('imageOverlay');
 const imagePreview = document.getElementById('imagePreview');
 if (imageOverlay) {
   imageOverlay.addEventListener('click', (e) => {
-    // 点击遮罩或关闭按钮都关闭
     if (e.target === imageOverlay || e.target.id === 'imageCloseBtn') {
       imageOverlay.classList.add('hidden');
-      imagePreview.src = '';
+      if (imagePreview) {
+        imagePreview.src = '';
+      }
     }
   });
 }
+
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && imageOverlay && !imageOverlay.classList.contains('hidden')) {
-    imageOverlay.classList.add('hidden');
-    imagePreview.src = '';
+  const tagName = e.target && e.target.tagName;
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || (e.target && e.target.isContentEditable)) {
+    return;
+  }
+
+  switch (e.code) {
+    case 'Space':
+      e.preventDefault();
+      if (Player.audio) {
+        Player.togglePlay();
+      }
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      if (Player.audio) {
+        Player.audio.currentTime = Math.max(0, (Player.audio.currentTime || 0) - 5);
+      }
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      if (Player.audio && Player.audio.duration) {
+        Player.audio.currentTime = Math.min(Player.audio.duration, (Player.audio.currentTime || 0) + 5);
+      }
+      break;
   }
 });
 
-// 预览图片（在浏览器内打开原图）
 window.previewImage = function (relPath) {
   if (!imageOverlay || !imagePreview) return;
   const url = `/api/image/${encodeURIComponent(currentProjectId)}/${encodePath(relPath)}`;
@@ -312,20 +350,20 @@ window.previewImage = function (relPath) {
   imageOverlay.classList.remove('hidden');
 };
 
-// 迷你播放器
 document.getElementById('miniBtn').addEventListener('click', () => {
   document.getElementById('playerBar').style.display = 'none';
   document.getElementById('miniPlayer').classList.remove('hidden');
 });
+
 document.getElementById('miniExpandBtn').addEventListener('click', () => {
   document.getElementById('miniPlayer').classList.add('hidden');
   document.getElementById('playerBar').style.display = '';
 });
+
 document.getElementById('miniPlayBtn').addEventListener('click', () => {
   Player.togglePlay();
 });
 
-// 刷新按钮
 document.getElementById('refreshBtn').addEventListener('click', async () => {
   const btn = document.getElementById('refreshBtn');
   btn.textContent = '刷新中...';
@@ -339,42 +377,20 @@ document.getElementById('refreshBtn').addEventListener('click', async () => {
   }
 });
 
-// 设置按钮：Electron 下打开独立设置窗口，Web 下跳转设置页
 document.getElementById('settingsBtn').addEventListener('click', async () => {
   if (window.electronAPI && window.electronAPI.invoke) {
     try {
       await window.electronAPI.invoke('settings:open');
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
   } else {
     window.location.href = '/settings.html';
   }
 });
 
-// 键盘快捷键
-document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
-  switch (e.code) {
-    case 'Space':
-      e.preventDefault();
-      Player.togglePlay();
-      break;
-    case 'ArrowLeft':
-      e.preventDefault();
-      Player.audio.currentTime = Math.max(0, (Player.audio.currentTime || 0) - 5);
-      break;
-    case 'ArrowRight':
-      e.preventDefault();
-      if (Player.audio.duration) {
-        Player.audio.currentTime = Math.min(Player.audio.duration, (Player.audio.currentTime || 0) + 5);
-      }
-      break;
-  }
-});
-
-// 自动播放下一首时加载歌词
 document.addEventListener('trackChanged', () => {
   loadLyricsForCurrent();
 });
 
-// 初始化
 loadProjects();

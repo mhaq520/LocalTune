@@ -1,24 +1,23 @@
-// Electron 主进程
-// 职责：加载配置 → 启动 Express → 创建主窗口 / 设置窗口 / 系统托盘
-
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs-extra');
 const config = require('./lib/config');
+const { startServer, clearProjectScanCache } = require('./server');
 
 let mainWindow = null;
 let settingsWindow = null;
 let tray = null;
 let serverInstance = null;
 let serverStarted = false;
+let serverStartupPromise = null;
 
-// 单实例锁（避免多开）
 function ensureSingleInstance() {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
     app.quit();
     return false;
   }
+
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -26,44 +25,103 @@ function ensureSingleInstance() {
       mainWindow.focus();
     }
   });
+
   return true;
 }
 
-// 启动内嵌 Express 服务器
+function waitForServerListening(server) {
+  return new Promise((resolve, reject) => {
+    if (!server) {
+      reject(new Error('Server instance missing'));
+      return;
+    }
+
+    if (server.listening) {
+      resolve(server);
+      return;
+    }
+
+    const cleanup = () => {
+      server.removeListener('listening', onListening);
+      server.removeListener('error', onError);
+    };
+
+    const onListening = () => {
+      cleanup();
+      resolve(server);
+    };
+
+    const onError = (err) => {
+      cleanup();
+      reject(err);
+    };
+
+    server.once('listening', onListening);
+    server.once('error', onError);
+  });
+}
+
+function handleServerStartError(err, port) {
+  if (err && err.code === 'EADDRINUSE') {
+    dialog.showErrorBox('端口被占用', `端口 ${port} 已被占用，请在设置中修改端口后重启。`);
+  } else {
+    console.error('服务器错误', err);
+  }
+}
+
 async function startEmbeddedServer() {
-  if (serverStarted) return;
+  if (serverInstance && serverStarted) return serverInstance;
+  if (serverStartupPromise) return serverStartupPromise;
+
   const cfg = config.load();
-  // 首次启动且未配置音乐目录：用占位路径，让服务器跑起来以便加载设置页
   const musicRoot = cfg.musicRoot || '';
-  const { startServer } = require('./server');
+
   serverInstance = startServer({
     PORT: cfg.port,
     MUSIC_ROOT: musicRoot,
     THUMBNAIL_DIR: cfg.thumbnailDir,
     CACHE_FILE: cfg.cacheFile
   });
-  serverInstance.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      dialog.showErrorBox('端口被占用', `端口 ${cfg.port} 已被占用，请在设置中修改端口后重启。`);
-    } else {
-      console.error('服务器错误:', err);
-    }
-  });
-  serverStarted = true;
+  serverStarted = false;
+
+  serverStartupPromise = waitForServerListening(serverInstance)
+    .then(() => {
+      serverStarted = true;
+      return serverInstance;
+    })
+    .catch((err) => {
+      serverStarted = false;
+      serverInstance = null;
+      handleServerStartError(err, cfg.port);
+      throw err;
+    })
+    .finally(() => {
+      serverStartupPromise = null;
+    });
+
+  return serverStartupPromise;
 }
 
 async function restartServer() {
-  if (serverInstance) {
-    serverInstance.close(() => {
-      serverStarted = false;
-      startEmbeddedServer();
-    });
-  } else {
-    startEmbeddedServer();
+  if (serverStartupPromise) {
+    try {
+      await serverStartupPromise;
+    } catch (e) {
+      // ignore startup failure here; the caller will observe the restart result
+    }
   }
+
+  if (serverInstance) {
+    await new Promise((resolve) => {
+      serverInstance.close(() => resolve());
+    });
+    serverInstance = null;
+    serverStarted = false;
+  }
+
+  return startEmbeddedServer();
 }
 
-// 创建主窗口
 function createMainWindow() {
   const cfg = config.load();
   mainWindow = new BrowserWindow({
@@ -81,22 +139,23 @@ function createMainWindow() {
     show: false
   });
 
-  // 等服务器就绪后加载页面
-  const loadURL = () => {
-    if (!serverStarted) {
-      setTimeout(loadURL, 200);
-      return;
+  const loadURL = async () => {
+    try {
+      await startEmbeddedServer();
+      if (!mainWindow) return;
+      const latestCfg = config.load();
+      await mainWindow.loadURL(`http://localhost:${latestCfg.port}/`);
+    } catch (err) {
+      // startup error already surfaced
     }
-    mainWindow.loadURL(`http://localhost:${cfg.port}/`);
   };
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
 
-  loadURL();
+  void loadURL();
 
-  // 关闭窗口行为：最小化到托盘 or 退出
   mainWindow.on('close', (e) => {
     if (cfg.minimizeToTray && !app.isQuitting) {
       e.preventDefault();
@@ -109,12 +168,12 @@ function createMainWindow() {
   });
 }
 
-// 创建设置窗口
 function createSettingsWindow() {
   if (settingsWindow) {
     settingsWindow.focus();
     return;
   }
+
   const cfg = config.load();
   settingsWindow = new BrowserWindow({
     width: 560,
@@ -130,20 +189,20 @@ function createSettingsWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+
   settingsWindow.loadURL(`http://localhost:${cfg.port}/settings.html`);
   settingsWindow.on('closed', () => {
     settingsWindow = null;
   });
 }
 
-// 系统托盘
 function createTray() {
-  // 用 1x1 透明 png 作为托盘图标占位（无图标资源时 fallback）
   let icon = nativeImage.createEmpty();
   const iconPath = path.join(__dirname, 'build', 'icon.png');
   if (fs.existsSync(iconPath)) {
     icon = nativeImage.createFromPath(iconPath);
   }
+
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
   const contextMenu = Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => { if (mainWindow) mainWindow.show(); } },
@@ -151,6 +210,7 @@ function createTray() {
     { type: 'separator' },
     { label: '退出', click: () => { app.isQuitting = true; app.quit(); } }
   ]);
+
   tray.setToolTip('音乐播放器');
   tray.setContextMenu(contextMenu);
   tray.on('click', () => {
@@ -161,7 +221,6 @@ function createTray() {
   });
 }
 
-// 开机自启
 function updateAutoStart() {
   const cfg = config.load();
   app.setLoginItemSettings({
@@ -170,7 +229,6 @@ function updateAutoStart() {
   });
 }
 
-// IPC：选择文件夹
 ipcMain.handle('dialog:openFolder', async (event) => {
   const parentWin = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showOpenDialog(parentWin, {
@@ -180,37 +238,33 @@ ipcMain.handle('dialog:openFolder', async (event) => {
   return result.filePaths[0];
 });
 
-// IPC：读取配置
 ipcMain.handle('config:load', () => {
   return config.load();
 });
 
-// IPC：保存配置
 ipcMain.handle('config:save', (event, newCfg) => {
-  const saved = config.save(newCfg);
-  return saved;
+  return config.save(newCfg);
 });
 
-// IPC：重启服务器（保存配置后调用）
 ipcMain.handle('server:restart', async () => {
   await restartServer();
   return { success: true };
 });
 
-// IPC：刷新主窗口（配置变更后）
-ipcMain.handle('window:reloadMain', () => {
+ipcMain.handle('window:reloadMain', async () => {
+  await startEmbeddedServer();
   if (mainWindow) {
     const cfg = config.load();
-    mainWindow.loadURL(`http://localhost:${cfg.port}/`);
+    await mainWindow.loadURL(`http://localhost:${cfg.port}/`);
   }
   return { success: true };
 });
 
-// IPC：获取缓存大小（直接调 fs，不走 HTTP）
 ipcMain.handle('cache:size', async () => {
   const cfg = config.load();
   const dir = cfg.thumbnailDir;
   if (!fs.existsSync(dir)) return { size: 0, count: 0 };
+
   let totalBytes = 0;
   let fileCount = 0;
   const files = await fs.readdir(dir);
@@ -224,7 +278,6 @@ ipcMain.handle('cache:size', async () => {
   return { size: totalBytes, count: fileCount };
 });
 
-// IPC：清理缓存
 ipcMain.handle('cache:clear', async () => {
   const cfg = config.load();
   const dir = cfg.thumbnailDir;
@@ -234,11 +287,17 @@ ipcMain.handle('cache:clear', async () => {
       await fs.remove(path.join(dir, f));
     }
   }
-  try { await fs.remove(cfg.cacheFile); } catch (e) { /* ignore */ }
+
+  clearProjectScanCache();
+  try {
+    await fs.remove(cfg.cacheFile);
+  } catch (e) {
+    // ignore
+  }
+
   return { success: true };
 });
 
-// IPC：打开外部链接（如打开缓存目录）
 ipcMain.handle('shell:openPath', async (event, p) => {
   if (p && fs.existsSync(p)) {
     shell.openPath(p);
@@ -246,35 +305,32 @@ ipcMain.handle('shell:openPath', async (event, p) => {
   return { success: true };
 });
 
-// IPC：打开设置窗口（由主页设置按钮触发）
 ipcMain.handle('settings:open', () => {
   createSettingsWindow();
   return { success: true };
 });
 
-// App 生命周期
 if (!ensureSingleInstance()) {
   return;
 }
 
 app.whenReady().then(async () => {
-  // 初始化配置文件路径
   config.init(app.getPath('userData'));
 
-  // 启动服务器
-  await startEmbeddedServer();
+  try {
+    await startEmbeddedServer();
+  } catch (e) {
+    return;
+  }
 
-  // 创建窗口 + 托盘
   createMainWindow();
   createTray();
   updateAutoStart();
 
-  // 命令行 --hidden 则启动后隐藏主窗口
   if (process.argv.includes('--hidden')) {
     if (mainWindow) mainWindow.hide();
   }
 
-  // macOS 点击 dock 图标时重建窗口
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
@@ -282,10 +338,8 @@ app.whenReady().then(async () => {
   });
 });
 
-// 所有窗口关闭时退出（macOS 除外）
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    // 启用托盘时不退出，否则退出
     const cfg = config.load();
     if (!cfg.minimizeToTray) {
       app.isQuitting = true;
@@ -294,7 +348,6 @@ app.on('window-all-closed', () => {
   }
 });
 
-// 退出前关闭服务器
 app.on('before-quit', () => {
   app.isQuitting = true;
   if (serverInstance) {
