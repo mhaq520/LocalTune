@@ -23,11 +23,13 @@ const detailView = document.getElementById('detailView');
 function showGrid() {
   detailView.classList.add('hidden');
   gridView.classList.remove('hidden');
+  document.body.classList.remove('detail-page');
 }
 
 function showDetail() {
   gridView.classList.add('hidden');
   detailView.classList.remove('hidden');
+  document.body.classList.add('detail-page');
 }
 
 async function loadProjects() {
