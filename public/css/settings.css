@@ -1,39 +1,70 @@
-/* Apple Music inspired preference pane */
+/* Light Apple-style preference pane */
 
 body.settings-body {
+  min-height: 100vh;
   padding-bottom: 72px;
+  color-scheme: light;
+  color: #111827;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.92), rgba(248, 250, 252, 0.72) 42%, rgba(239, 242, 247, 0.98) 100%);
+  --settings-surface: rgba(255, 255, 255, 0.82);
+  --settings-surface-strong: rgba(255, 255, 255, 0.94);
+  --settings-border: rgba(15, 23, 42, 0.08);
+  --settings-border-strong: rgba(15, 23, 42, 0.14);
+  --settings-text: #111827;
+  --settings-text-soft: #64748b;
+  --settings-text-muted: #94a3b8;
+  --settings-accent: #0a84ff;
+  --settings-accent-soft: rgba(10, 132, 255, 0.12);
+  --settings-danger: #d92d20;
+  --settings-danger-soft: rgba(217, 45, 32, 0.1);
+  --settings-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
+  --settings-shadow-soft: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+
+body.settings-body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 18%),
+    radial-gradient(circle at 15% 0%, rgba(10, 132, 255, 0.08), transparent 28%),
+    radial-gradient(circle at 85% 10%, rgba(255, 159, 10, 0.05), transparent 24%);
 }
 
 .settings-container {
-  width: min(920px, calc(100% - 32px));
+  position: relative;
+  width: min(980px, calc(100% - 32px));
   margin: 0 auto;
-  padding: 28px 0 40px;
+  padding: 32px 0 44px;
+  isolation: isolate;
 }
 
 .settings-header {
   -webkit-app-region: drag;
-  margin: 0 0 22px;
+  margin: 0 0 24px;
   padding: 6px 4px 0;
 }
 
 .settings-header h1 {
   margin: 0;
-  color: var(--text-primary);
+  color: var(--settings-text);
   font-size: clamp(30px, 4vw, 42px);
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.05;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.05em;
 }
 
 .settings-section {
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   padding: 22px 24px 24px;
-  border: 1px solid var(--border);
-  border-radius: 28px;
-  background: rgba(18, 20, 28, 0.78);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  box-shadow: var(--shadow-md);
+  border: 1px solid var(--settings-border);
+  border-radius: 24px;
+  background: linear-gradient(180deg, var(--settings-surface-strong), var(--settings-surface));
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: var(--settings-shadow-soft);
 }
 
 .settings-section:last-of-type {
@@ -42,10 +73,10 @@ body.settings-body {
 
 .section-title {
   margin: 0 0 14px;
-  color: var(--text-muted);
+  color: var(--settings-text-soft);
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
 }
 
@@ -61,22 +92,23 @@ body.settings-body {
   min-width: 240px;
   height: 44px;
   padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-primary);
+  border: 1px solid var(--settings-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--settings-text);
   font-size: 13px;
-  transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  transition: border-color var(--transition), background var(--transition), box-shadow var(--transition), transform var(--transition);
 }
 
 .text-input::placeholder {
-  color: var(--text-muted);
+  color: var(--settings-text-muted);
 }
 
 .text-input:focus {
-  border-color: rgba(255, 55, 95, 0.34);
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 0 0 4px rgba(255, 55, 95, 0.12);
+  border-color: rgba(10, 132, 255, 0.42);
+  background: #fff;
+  box-shadow: 0 0 0 4px var(--settings-accent-soft);
 }
 
 .port-input {
@@ -89,51 +121,53 @@ body.settings-body {
   justify-content: center;
   min-height: 44px;
   padding: 0 16px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
+  border: 1px solid var(--settings-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--settings-text);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82);
   transition: transform var(--transition), background var(--transition), border-color var(--transition), box-shadow var(--transition), color var(--transition);
 }
 
 .btn:hover {
   transform: translateY(-1px);
-  border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.1);
-  box-shadow: var(--shadow-sm);
+  border-color: var(--settings-border-strong);
+  background: #fff;
+  box-shadow: var(--settings-shadow-soft);
 }
 
 .btn:active {
-  transform: scale(0.98);
+  transform: translateY(0) scale(0.985);
 }
 
 .btn-primary {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--accent), #ff6a86);
+  background: linear-gradient(180deg, #0a84ff, #0071e3);
   color: #fff;
-  box-shadow: 0 14px 28px rgba(255, 55, 95, 0.2);
+  box-shadow: 0 14px 24px rgba(10, 132, 255, 0.18);
 }
 
 .btn-primary:hover {
-  background: linear-gradient(135deg, var(--accent-strong), #ff7b93);
+  background: linear-gradient(180deg, #1592ff, #0a84ff);
 }
 
 .btn-secondary {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.84);
 }
 
 .btn-danger {
-  border-color: rgba(255, 55, 95, 0.22);
-  background: rgba(255, 55, 95, 0.1);
-  color: #ff92a7;
+  border-color: rgba(217, 45, 32, 0.18);
+  background: var(--settings-danger-soft);
+  color: var(--settings-danger);
 }
 
 .btn-danger:hover {
-  background: rgba(255, 55, 95, 0.18);
-  color: #fff;
+  border-color: rgba(217, 45, 32, 0.24);
+  background: rgba(217, 45, 32, 0.14);
+  color: #b42318;
 }
 
 .btn-large {
@@ -143,7 +177,7 @@ body.settings-body {
 
 .hint {
   margin: 10px 0 0;
-  color: var(--text-muted);
+  color: var(--settings-text-soft);
   font-size: 12px;
 }
 
@@ -153,12 +187,12 @@ body.settings-body {
 }
 
 .cache-stat {
-  color: var(--text-secondary);
+  color: var(--settings-text-soft);
   font-size: 13px;
 }
 
 .cache-stat strong {
-  color: var(--text-primary);
+  color: var(--settings-text);
   font-weight: 700;
 }
 
@@ -167,9 +201,9 @@ body.settings-body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
-  color: var(--text-primary);
+  padding: 15px 0;
+  border-top: 1px solid var(--settings-border);
+  color: var(--settings-text);
   font-size: 14px;
 }
 
@@ -184,9 +218,10 @@ body.settings-body {
   height: 30px;
   appearance: none;
   -webkit-appearance: none;
-  border: 1px solid var(--border);
+  border: 1px solid rgba(148, 163, 184, 0.45);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.8);
   cursor: pointer;
   transition: background var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
@@ -200,14 +235,14 @@ body.settings-body {
   height: 22px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
   transition: transform var(--transition), background var(--transition);
 }
 
 .toggle:checked {
   border-color: transparent;
-  background: linear-gradient(135deg, var(--accent), #ff6a86);
-  box-shadow: 0 10px 20px rgba(255, 55, 95, 0.18);
+  background: linear-gradient(180deg, #0a84ff, #0071e3);
+  box-shadow: 0 10px 18px rgba(10, 132, 255, 0.18);
 }
 
 .toggle:checked::before {
@@ -226,27 +261,27 @@ body.settings-body {
 
 .save-status {
   margin-left: auto;
-  color: var(--text-muted);
+  color: var(--settings-text-soft);
   font-size: 13px;
 }
 
 .save-status.success {
-  color: var(--success);
+  color: #1f7a3d;
 }
 
 .save-status.error {
-  color: #ff7b93;
+  color: var(--settings-danger);
 }
 
 @media (max-width: 600px) {
   .settings-container {
-    width: min(100% - 24px, 920px);
+    width: min(100% - 24px, 980px);
     padding-top: 18px;
   }
 
   .settings-section {
     padding: 18px;
-    border-radius: 24px;
+    border-radius: 22px;
   }
 
   .row {

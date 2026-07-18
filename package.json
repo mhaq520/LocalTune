@@ -1,6 +1,6 @@
 {
   "name": "music-player",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "本地音乐播放器 - 支持音频流、歌词同步、缩略图生成",
   "main": "main.js",
   "scripts": {
